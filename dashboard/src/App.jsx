@@ -162,6 +162,11 @@ function App() {
   const [status, setStatus] = useState('idle'); // idle, processing, complete, error
   const [results, setResults] = useState(null);
   const [logs, setLogs] = useState([]);
+  // Stable per-line receive times. Logs arrive as a plain string array (replaced
+  // wholesale each poll), so we record the time each new index first appears and
+  // keep it fixed — otherwise rendering new Date() per line makes every timestamp
+  // jump to "now" on every re-render.
+  const [logTimes, setLogTimes] = useState([]);
   const [logsVisible, setLogsVisible] = useState(true);
   const [processingMedia, setProcessingMedia] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, settings
@@ -183,6 +188,21 @@ function App() {
   const handleClipPause = () => {
     setIsSyncedPlaying(false);
   };
+
+  // Keep a stable timestamp per log line: only assign a time to newly-seen
+  // indices, and rebuild if the log list was reset/shrunk (new job).
+  useEffect(() => {
+    setLogTimes(prev => {
+      if (logs.length === prev.length) return prev;
+      const now = new Date().toLocaleTimeString();
+      if (logs.length < prev.length) {
+        return logs.map((_, i) => prev[i] || now);
+      }
+      const next = prev.slice();
+      for (let i = prev.length; i < logs.length; i++) next.push(now);
+      return next;
+    });
+  }, [logs]);
 
   // Session Recovery: Restore on mount
   useEffect(() => {
@@ -321,7 +341,8 @@ function App() {
   };
 
   const handleProcess = async (data) => {
-    if (!apiKey || !uploadPostKey) {
+    const needsGemini = (data.clipMode || 'viral') !== 'split';
+    if ((needsGemini && !apiKey) || !uploadPostKey) {
       setShowKeyModal(true);
       return;
     }
@@ -336,11 +357,18 @@ function App() {
 
       if (data.type === 'url') {
         headers['Content-Type'] = 'application/json';
-        body = JSON.stringify({ url: data.payload, acknowledged: !!data.acknowledged });
+        body = JSON.stringify({
+          url: data.payload,
+          acknowledged: !!data.acknowledged,
+          split_parts: data.clipMode === 'split',
+          part_length: data.partLength || 60,
+        });
       } else {
         const formData = new FormData();
         formData.append('file', data.payload);
         formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
+        formData.append('split_parts', data.clipMode === 'split' ? 'true' : 'false');
+        formData.append('part_length', String(data.partLength || 60));
         body = formData;
       }
 
@@ -928,7 +956,7 @@ function App() {
                     <div className="flex-1 p-4 overflow-y-auto font-mono text-xs space-y-1.5 custom-scrollbar text-zinc-400">
                       {logs.map((log, i) => (
                         <div key={i} className={`flex gap-2 ${log.toLowerCase().includes('error') ? 'text-red-400' : 'text-zinc-400'}`}>
-                          <span className="text-zinc-700 shrink-0">{new Date().toLocaleTimeString()}</span>
+                          <span className="text-zinc-700 shrink-0">{logTimes[i] || ''}</span>
                           <span>{log}</span>
                         </div>
                       ))}

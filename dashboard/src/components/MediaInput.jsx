@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Youtube, Upload, FileVideo, X } from 'lucide-react';
+import { Youtube, Upload, FileVideo, X, Scissors, Sparkles } from 'lucide-react';
 import { getApiUrl } from '../config';
 
 export default function MediaInput({ onProcess, isProcessing }) {
@@ -8,6 +8,8 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [url, setUrl] = useState('');
     const [file, setFile] = useState(null);
     const [acknowledged, setAcknowledged] = useState(false);
+    const [clipMode, setClipMode] = useState('viral');   // 'viral' | 'split'
+    const [partLength, setPartLength] = useState(60);    // 60 | 90 | 180
 
     useEffect(() => {
         fetch(getApiUrl('/api/config'))
@@ -25,9 +27,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
         e.preventDefault();
         if (!acknowledged) return;
         if (mode === 'url' && url) {
-            onProcess({ type: 'url', payload: url, acknowledged: true });
+            onProcess({ type: 'url', payload: url, acknowledged: true, clipMode, partLength });
         } else if (mode === 'file' && file) {
-            onProcess({ type: 'file', payload: file, acknowledged: true });
+            onProcess({ type: 'file', payload: file, acknowledged: true, clipMode, partLength });
         }
     };
 
@@ -65,6 +67,52 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     Upload File
                 </button>
             </div>
+
+            <div className="flex gap-1 mb-4 p-1 bg-white/5 border border-white/10 rounded-xl">
+                <button
+                    type="button"
+                    onClick={() => setClipMode('viral')}
+                    className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all ${clipMode === 'viral'
+                        ? 'bg-primary/15 text-primary'
+                        : 'text-zinc-400 hover:text-white'
+                        }`}
+                >
+                    <Sparkles size={16} />
+                    Viral Moments
+                </button>
+                <button
+                    type="button"
+                    onClick={() => setClipMode('split')}
+                    className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all ${clipMode === 'split'
+                        ? 'bg-primary/15 text-primary'
+                        : 'text-zinc-400 hover:text-white'
+                        }`}
+                >
+                    <Scissors size={16} />
+                    Split into Parts
+                </button>
+            </div>
+
+            {clipMode === 'split' && (
+                <div className="mb-4">
+                    <p className="text-xs text-zinc-500 mb-2">Part length</p>
+                    <div className="flex gap-2">
+                        {[{ v: 60, l: '60s' }, { v: 90, l: '90s' }, { v: 180, l: '3 min' }].map((opt) => (
+                            <button
+                                key={opt.v}
+                                type="button"
+                                onClick={() => setPartLength(opt.v)}
+                                className={`flex-1 py-2 rounded-lg border text-sm font-medium transition-all ${partLength === opt.v
+                                    ? 'border-primary/50 bg-primary/10 text-primary'
+                                    : 'border-white/10 bg-white/5 text-zinc-400 hover:text-white'
+                                    }`}
+                            >
+                                {opt.l}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             <form onSubmit={handleSubmit}>
                 {mode === 'url' ? (

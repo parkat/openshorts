@@ -1,0 +1,15 @@
+# docker-compose.gpu.yml — NEW FILE. GPU override; apply ON TOP of docker-compose.yml.
+# Reserves the NVIDIA GPU for the backend only. Keep docker-compose.yml itself GPU-free.
+services:
+  backend:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+# Run GPU mode with (docker compose v2 syntax):
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+# Base `docker compose up` stays GPU-less-safe (constraint 1). docker-compose.yml is UNCHANGED.

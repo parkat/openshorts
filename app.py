@@ -318,13 +318,14 @@ async def process_endpoint(
     request: Request,
     file: Optional[UploadFile] = File(None),
     url: Optional[str] = Form(None),
-    acknowledged: Optional[str] = Form(None)
+    acknowledged: Optional[str] = Form(None),
+    split_parts: Optional[str] = Form(None),
+    part_length: Optional[str] = Form(None)
 ):
     api_key = request.headers.get("X-Gemini-Key")
-    if not api_key:
-        raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
 
     ack_flag = str(acknowledged).lower() in ("1", "true", "yes")
+    split_flag = str(split_parts).lower() in ("1", "true", "yes")
 
     # Handle JSON body manually for URL payload
     content_type = request.headers.get("content-type", "")
@@ -332,6 +333,19 @@ async def process_endpoint(
         body = await request.json()
         url = body.get("url")
         ack_flag = bool(body.get("acknowledged"))
+        split_flag = bool(body.get("split_parts"))
+        part_length = body.get("part_length")
+
+    # Resolve part length (seconds); default 60, clamp to a sane range
+    try:
+        part_len = int(part_length) if part_length not in (None, "") else 60
+    except (TypeError, ValueError):
+        part_len = 60
+    part_len = max(10, min(part_len, 600))
+
+    # Gemini key required only for viral mode (split mode uses no Gemini call)
+    if not split_flag and not api_key:
+        raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
 
     if not url and not file:
         raise HTTPException(status_code=400, detail="Must provide URL or File")
@@ -363,7 +377,8 @@ async def process_endpoint(
     # Prepare Command
     cmd = ["python", "-u", "main.py"] # -u for unbuffered
     env = os.environ.copy()
-    env["GEMINI_API_KEY"] = api_key # Override with key from request
+    if api_key:
+        env["GEMINI_API_KEY"] = api_key # Override with key from request
 
     if url:
         cmd.extend(["-u", url])
@@ -388,6 +403,9 @@ async def process_endpoint(
 
     cmd.extend(["-o", job_output_dir])
 
+    if split_flag:
+        cmd.extend(["--split-parts", "--part-length", str(part_len)])
+
     print(f"[attestation] job={job_id} ip={attestation['ip']} source={attestation['source']} ack=true")
 
     # Enqueue Job
@@ -404,12 +422,48 @@ async def process_endpoint(
 
     return {"job_id": job_id, "status": "queued"}
 
+def get_job_or_rehydrate(job_id: str):
+    """Return the in-memory job, or rebuild a minimal completed job from on-disk
+    metadata if it's missing.
+
+    The `jobs` dict is in-memory only, so a server restart (or the 1-hour
+    auto-cleanup) wipes it — which would make Auto Edit / Subtitles / Hooks /
+    Effects fail with "Job not found" even though the clips still exist on disk.
+    This reconstructs `job['result']['clips']` (with video_url) from the saved
+    <job_id>/*_metadata.json so those actions keep working across restarts.
+    Raises 404 only if no metadata exists on disk.
+    """
+    job = jobs.get(job_id)
+    if job is not None:
+        return job
+
+    output_dir = os.path.join(OUTPUT_DIR, job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    target_json = json_files[0]
+    with open(target_json, 'r') as f:
+        data = json.load(f)
+
+    base_name = os.path.basename(target_json).replace('_metadata.json', '')
+    clips = data.get('shorts', [])
+    cost_analysis = data.get('cost_analysis')
+    for i, clip in enumerate(clips):
+        clip_filename = f"{base_name}_clip_{i+1}.mp4"
+        clip['video_url'] = f"/videos/{job_id}/{clip_filename}"
+
+    job = {
+        'status': 'completed',
+        'logs': ['(rehydrated from disk after server restart)'],
+        'result': {'clips': clips, 'cost_analysis': cost_analysis},
+    }
+    jobs[job_id] = job
+    return job
+
 @app.get("/api/status/{job_id}")
 async def get_status(job_id: str):
-    if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    job = jobs[job_id]
+    job = get_job_or_rehydrate(job_id)
     return {
         "status": job['status'],
         "logs": job['logs'],
@@ -439,10 +493,7 @@ async def edit_clip(
     if not final_api_key:
         raise HTTPException(status_code=400, detail="Missing Gemini API Key (Header or Body)")
 
-    if req.job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    job = jobs[req.job_id]
+    job = get_job_or_rehydrate(req.job_id)
     if 'result' not in job or 'clips' not in job['result']:
         raise HTTPException(status_code=400, detail="Job result not available")
         
@@ -478,7 +529,8 @@ async def edit_clip(
             
             # Copy original file to safe path
             # (Copy is safer than rename if something crashes, we keep original)
-            shutil.copy(input_path, safe_input_path)
+            # copyfile (not copy) avoids chmod, which raises EPERM on Windows/WSL bind mounts.
+            shutil.copyfile(input_path, safe_input_path)
             
             try:
                 # 1. Upload (using safe path)
@@ -568,8 +620,7 @@ class SubtitleRequest(BaseModel):
 @app.get("/api/clip/{job_id}/{clip_index}/transcript")
 async def get_clip_transcript(job_id: str, clip_index: int):
     """Return word-level captions for a specific clip, formatted for Remotion."""
-    if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
+    get_job_or_rehydrate(job_id)
 
     output_dir = os.path.join(OUTPUT_DIR, job_id)
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
@@ -655,10 +706,7 @@ async def generate_effects_config(
     if not final_api_key:
         raise HTTPException(status_code=400, detail="Missing Gemini API Key (Header)")
 
-    if req.job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    job = jobs[req.job_id]
+    job = get_job_or_rehydrate(req.job_id)
     if 'result' not in job or 'clips' not in job['result']:
         raise HTTPException(status_code=400, detail="Job result not available")
 
@@ -681,7 +729,8 @@ async def generate_effects_config(
             # Create safe ASCII filename to avoid encoding issues
             safe_filename = f"temp_effects_{req.job_id}.mp4"
             safe_input_path = os.path.join(OUTPUT_DIR, req.job_id, safe_filename)
-            shutil.copy(input_path, safe_input_path)
+            # copyfile avoids chmod (EPERM on Windows/WSL bind mounts)
+            shutil.copyfile(input_path, safe_input_path)
 
             try:
                 # Upload video to Gemini
@@ -751,11 +800,8 @@ async def generate_effects_config(
 
 @app.post("/api/subtitle")
 async def add_subtitles(req: SubtitleRequest):
-    if req.job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
     # Reload job data from disk just in case metadata was updated
-    job = jobs[req.job_id]
+    job = get_job_or_rehydrate(req.job_id)
     
     # We need to access metadata.json to get the transcript
     output_dir = os.path.join(OUTPUT_DIR, req.job_id)
@@ -872,10 +918,7 @@ class HookRequest(BaseModel):
 
 @app.post("/api/hook")
 async def add_hook(req: HookRequest):
-    if req.job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    job = jobs[req.job_id]
+    job = get_job_or_rehydrate(req.job_id)
     output_dir = os.path.join(OUTPUT_DIR, req.job_id)
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
     
@@ -966,10 +1009,7 @@ async def translate_clip(
     if not x_elevenlabs_key:
         raise HTTPException(status_code=400, detail="Missing X-ElevenLabs-Key header")
 
-    if req.job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    job = jobs[req.job_id]
+    job = get_job_or_rehydrate(req.job_id)
     output_dir = os.path.join(OUTPUT_DIR, req.job_id)
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
 
@@ -1057,10 +1097,7 @@ import httpx
 
 @app.post("/api/social/post")
 async def post_to_socials(req: SocialPostRequest):
-    if req.job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    job = jobs[req.job_id]
+    job = get_job_or_rehydrate(req.job_id)
     if 'result' not in job or 'clips' not in job['result']:
         raise HTTPException(status_code=400, detail="Job result not available")
         

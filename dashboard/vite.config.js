@@ -5,6 +5,12 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
+    // WSL2/Docker bind mounts over the Windows filesystem don't deliver inotify
+    // events, so Vite never sees edits. Polling makes HMR reliable in that setup.
+    watch: {
+      usePolling: true,
+      interval: 300,
+    },
     allowedHosts: [
       'openshorts.app',
       'www.openshorts.app'
