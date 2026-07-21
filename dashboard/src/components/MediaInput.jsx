@@ -23,11 +23,22 @@ export default function MediaInput({ onProcess, isProcessing }) {
             .catch(() => {});
     }, []);
 
+    // Normalize a pasted link: trim whitespace and auto-prepend https:// when the
+    // user omitted the scheme (common when copying "www.youtube.com/..."). This is
+    // why the old type="url" field rejected valid-looking links with "Please enter a URL".
+    const normalizeUrl = (raw) => {
+        const t = (raw || '').trim();
+        if (!t) return '';
+        return /^https?:\/\//i.test(t) ? t : `https://${t}`;
+    };
+
     const handleSubmit = (e) => {
         e.preventDefault();
         if (!acknowledged) return;
-        if (mode === 'url' && url) {
-            onProcess({ type: 'url', payload: url, acknowledged: true, clipMode, partLength });
+        if (mode === 'url') {
+            const cleanUrl = normalizeUrl(url);
+            if (!cleanUrl) return;
+            onProcess({ type: 'url', payload: cleanUrl, acknowledged: true, clipMode, partLength });
         } else if (mode === 'file' && file) {
             onProcess({ type: 'file', payload: file, acknowledged: true, clipMode, partLength });
         }
@@ -118,7 +129,8 @@ export default function MediaInput({ onProcess, isProcessing }) {
                 {mode === 'url' ? (
                     <div className="space-y-4">
                         <input
-                            type="url"
+                            type="text"
+                            inputMode="url"
                             value={url}
                             onChange={(e) => setUrl(e.target.value)}
                             placeholder="https://www.youtube.com/watch?v=..."

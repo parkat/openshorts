@@ -248,7 +248,10 @@ function App() {
     } catch (e) {
       // localStorage full or serialization error - ignore
     }
-  }, [jobId, status, results, activeTab]);
+    // processingMedia MUST be a dependency: it is persisted above, so if it is
+    // omitted the saved session can keep an old video while a newer job runs,
+    // and the stale clip is restored under the effects on the next page load.
+  }, [jobId, status, results, activeTab, processingMedia]);
 
   useEffect(() => {
     // Encrypt Gemini Key too for consistency if desired, but user asked specifically about Social integration not saving well.
