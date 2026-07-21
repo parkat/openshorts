@@ -512,10 +512,13 @@ def download_youtube_video(url, output_dir="."):
         'fragment_retries': 10,
         'nocheckcertificate': True,
         'cachedir': False,
+        # Let yt-dlp use its maintained default player clients. The old hardcoded
+        # list (tv_embed/android/mweb/web) is now SABR/PO-token blocked to a single
+        # 360p format (itag 18), which capped every clip at 360p. The 'default'
+        # set reaches the full DASH ladder (avc1 up to 1080p, VP9/AV1 up to 4K).
         'extractor_args': {
             'youtube': {
-                'player_client': ['tv_embed', 'android', 'mweb', 'web'],
-                'player_skip': ['webpage', 'configs'],
+                'player_client': ['default'],
             }
         },
         'http_headers': {
