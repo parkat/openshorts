@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { X, Type, Loader2 } from 'lucide-react';
+import { X, Type, Loader2, Save, Trash2, Bookmark } from 'lucide-react';
 import { getApiUrl } from '../config';
 import RemotionPreview from './RemotionPreview';
+import { buildSubtitleConfig, positionZone, ffMarginV } from '../lib/subtitleConfig';
+import { listPresets, savePreset, deletePreset } from '../lib/presetsApi';
 
 const FONT_OPTIONS = [
     { value: 'Verdana', label: 'Verdana' },
@@ -40,6 +42,52 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
     const [bgOpacity, setBgOpacity] = useState(0.0);
     const [animation, setAnimation] = useState('pop');
     const [showTextEditor, setShowTextEditor] = useState(false);
+
+    // Preset library (backend-synced, shared with the batch bar)
+    const [presets, setPresets] = useState([]);
+    const [presetId, setPresetId] = useState('');
+
+    const currentSettings = () => ({
+        positionY, fontSize, fontName, fontColor, highlightColor,
+        borderColor, borderWidth, bgColor, bgOpacity, animation,
+    });
+    const applySettings = (s) => {
+        if (!s) return;
+        if (s.positionY !== undefined) setPositionY(s.positionY);
+        if (s.fontSize !== undefined) setFontSize(s.fontSize);
+        if (s.fontName !== undefined) setFontName(s.fontName);
+        if (s.fontColor !== undefined) setFontColor(s.fontColor);
+        if (s.highlightColor !== undefined) setHighlightColor(s.highlightColor);
+        if (s.borderColor !== undefined) setBorderColor(s.borderColor);
+        if (s.borderWidth !== undefined) setBorderWidth(s.borderWidth);
+        if (s.bgColor !== undefined) setBgColor(s.bgColor);
+        if (s.bgOpacity !== undefined) setBgOpacity(s.bgOpacity);
+        if (s.animation !== undefined) setAnimation(s.animation);
+    };
+
+    const refreshPresets = () => listPresets().then(setPresets).catch(() => {});
+    useEffect(() => { if (isOpen) refreshPresets(); }, [isOpen]);
+
+    const handleLoadPreset = (id) => {
+        setPresetId(id);
+        const p = presets.find((x) => x.id === id);
+        if (p) applySettings(p.settings);
+    };
+    const handleSavePreset = async () => {
+        const name = window.prompt('Save subtitle preset as:');
+        if (!name || !name.trim()) return;
+        try {
+            const saved = await savePreset({ name: name.trim(), kind: 'subtitle', settings: currentSettings() });
+            await refreshPresets();
+            if (saved?.id) setPresetId(saved.id);
+        } catch (e) { alert('Could not save preset: ' + e.message); }
+    };
+    const handleDeletePreset = async () => {
+        const p = presets.find((x) => x.id === presetId);
+        if (!p || !window.confirm(`Delete preset "${p.name}"?`)) return;
+        try { await deletePreset(presetId); setPresetId(''); await refreshPresets(); }
+        catch (e) { alert('Could not delete preset: ' + e.message); }
+    };
 
     // Remotion preview state
     const [captions, setCaptions] = useState([]);
@@ -95,30 +143,10 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
 
     if (!isOpen) return null;
 
-    // Vertical % -> coarse zone (for the FFmpeg fallback + preset highlighting)
-    const positionZone = positionY <= 33 ? 'top' : positionY >= 66 ? 'bottom' : 'middle';
-    // FFmpeg fallback: map vertical % to an ASS MarginV (PlayResY=288 virtual units).
-    const ffMarginV = positionZone === 'top' ? Math.round((positionY / 100) * 288)
-        : positionZone === 'bottom' ? Math.round(((100 - positionY) / 100) * 288)
-        : 25;
-
-    // Build subtitle config for Remotion
-    const subtitleConfig = {
-        captions,
-        position: positionZone,
-        positionY,
-        style: {
-            fontFamily: fontName,
-            fontSize: fontSize * 2.2, // Scale up for 1080p (modal fontSize is for small preview)
-            fontColor,
-            highlightColor,
-            borderColor,
-            borderWidth: borderWidth * 1.5,
-            bgColor,
-            bgOpacity,
-            animation,
-        },
-    };
+    // Coarse zone + FFmpeg fallback margin + Remotion config (shared with batch).
+    const zone = positionZone(positionY);
+    const marginV = ffMarginV(positionY);
+    const subtitleConfig = buildSubtitleConfig(currentSettings(), captions);
 
     // Fallback: static CSS preview (same as original)
     const bw = Math.max(borderWidth, 0);
@@ -192,6 +220,29 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
                         <Type className="text-primary" /> Auto Subtitles
                     </h3>
 
+                    {/* Preset bar: load / save / delete (synced across devices) */}
+                    <div className="flex items-center gap-2 mb-4 shrink-0">
+                        <Bookmark size={14} className="text-primary shrink-0" />
+                        <select
+                            value={presetId}
+                            onChange={(e) => handleLoadPreset(e.target.value)}
+                            className="flex-1 min-w-0 bg-black/40 border border-white/10 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-primary/50"
+                        >
+                            <option value="">Load preset…</option>
+                            {presets.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
+                        </select>
+                        <button type="button" onClick={handleSavePreset} title="Save current settings as a preset"
+                            className="p-2 rounded-lg bg-white/5 border border-white/10 text-zinc-300 hover:text-white hover:bg-white/10 shrink-0">
+                            <Save size={14} />
+                        </button>
+                        {presetId && (
+                            <button type="button" onClick={handleDeletePreset} title="Delete this preset"
+                                className="p-2 rounded-lg bg-white/5 border border-white/10 text-zinc-400 hover:text-red-400 hover:bg-white/10 shrink-0">
+                                <Trash2 size={14} />
+                            </button>
+                        )}
+                    </div>
+
                     <div className="space-y-5 flex-1 overflow-y-auto custom-scrollbar pr-1">
                         {/* Position: presets + fine vertical slider */}
                         <div>
@@ -201,7 +252,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
                                     <button
                                         key={p.k}
                                         onClick={() => setPositionY(p.v)}
-                                        className={`p-2 rounded-lg border text-center text-xs font-medium transition-all ${positionZone === p.k ? 'bg-primary/20 border-primary text-white' : 'bg-white/5 border-white/5 text-zinc-400 hover:bg-white/10'}`}
+                                        className={`p-2 rounded-lg border text-center text-xs font-medium transition-all ${zone === p.k ? 'bg-primary/20 border-primary text-white' : 'bg-white/5 border-white/5 text-zinc-400 hover:bg-white/10'}`}
                                     >
                                         {p.k.charAt(0).toUpperCase() + p.k.slice(1)}
                                     </button>
@@ -382,8 +433,9 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
 
                     <button
                         onClick={() => onGenerate({
-                            position: positionZone, positionY, margin_v: ffMarginV,
+                            position: zone, positionY, margin_v: marginV,
                             fontSize, fontName, fontColor, borderColor, borderWidth, bgColor, bgOpacity,
+                            settings: currentSettings(),
                             // Remotion data
                             remotion: useRemotionPreview ? subtitleConfig : null,
                         })}

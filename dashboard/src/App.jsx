@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Upload, FileVideo, Sparkles, Youtube, Instagram, Share2, LogOut, ChevronDown, Check, Activity, LayoutDashboard, Settings, PlusCircle, History, Menu, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2 } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
@@ -9,7 +9,9 @@ import ThumbnailStudio from './components/ThumbnailStudio';
 import SaaShortsTab from './components/SaaShortsTab';
 import UGCGallery from './components/UGCGallery';
 import ScheduleWeekModal from './components/ScheduleWeekModal';
+import BatchBar from './components/BatchBar';
 import { getApiUrl } from './config';
+import { listPresets } from './lib/presetsApi';
 
 // Enhanced "Encryption" using XOR + Base64 with a Salt
 // This is better than plain Base64 but still client-side.
@@ -174,6 +176,13 @@ function App() {
   const [sessionRecovered, setSessionRecovered] = useState(false);
   const [showScheduleWeek, setShowScheduleWeek] = useState(false);
 
+  // --- Batch processing + clip selection ---
+  const [selected, setSelected] = useState(() => new Set());
+  const [batch, setBatch] = useState({ running: false, done: 0, total: 0, stage: '', error: '' });
+  const [subtitlePresets, setSubtitlePresets] = useState([]);
+  const cardRefs = useRef([]);
+  const batchAbortRef = useRef(null);
+
   // Sync state for original video playback
   const [syncedTime, setSyncedTime] = useState(0);
   const [isSyncedPlaying, setIsSyncedPlaying] = useState(false);
@@ -187,6 +196,87 @@ function App() {
 
   const handleClipPause = () => {
     setIsSyncedPlaying(false);
+  };
+
+  // Reset selection on a new job; load subtitle presets once clips exist.
+  useEffect(() => {
+    setSelected(new Set());
+    setBatch({ running: false, done: 0, total: 0, stage: '', error: '' });
+  }, [jobId]);
+  useEffect(() => {
+    if (results?.clips?.length) {
+      listPresets().then(ps => setSubtitlePresets(ps.filter(p => p.kind === 'subtitle'))).catch(() => {});
+    }
+  }, [results?.clips?.length]);
+
+  const clipCount = results?.clips?.length || 0;
+  const toggleSelected = (index) => setSelected(prev => {
+    const next = new Set(prev);
+    if (next.has(index)) next.delete(index); else next.add(index);
+    return next;
+  });
+  const toggleSelectAll = () => setSelected(prev =>
+    prev.size === clipCount ? new Set() : new Set(Array.from({ length: clipCount }, (_, i) => i))
+  );
+
+  // Sequentially drive each selected card through its edits (the renderer is a
+  // single service — sequential avoids overloading it). Cancellable mid-run.
+  const runBatch = async ({ subtitleSettings, doHook, doAutoEdit }) => {
+    const indices = Array.from(selected).sort((a, b) => a - b);
+    if (indices.length === 0) return;
+    const controller = new AbortController();
+    batchAbortRef.current = controller;
+    setBatch({ running: true, done: 0, total: indices.length, stage: '', error: '' });
+    let done = 0;
+    try {
+      for (const idx of indices) {
+        if (controller.signal.aborted) break;
+        setBatch(b => ({ ...b, stage: `Rendering clip ${idx + 1} (${done + 1}/${indices.length})…` }));
+        const card = cardRefs.current[idx];
+        if (card && card.applyEdits) {
+          await card.applyEdits({ subtitleSettings, doHook, doAutoEdit, signal: controller.signal });
+        }
+        done += 1;
+        setBatch(b => ({ ...b, done }));
+      }
+      setBatch({ running: false, done, total: indices.length, stage: '', error: controller.signal.aborted ? 'Cancelled.' : '' });
+    } catch (e) {
+      setBatch({ running: false, done, total: indices.length, stage: '', error: e.name === 'AbortError' ? 'Cancelled.' : (e.message || 'Batch failed') });
+    } finally {
+      batchAbortRef.current = null;
+    }
+  };
+  const cancelBatch = () => { if (batchAbortRef.current) batchAbortRef.current.abort(); };
+
+  // Zip the selected clips' current (latest edited) files server-side, download once.
+  const downloadSelectedZip = async () => {
+    const indices = Array.from(selected).sort((a, b) => a - b);
+    if (indices.length === 0) return;
+    const items = [];
+    for (const idx of indices) {
+      const card = cardRefs.current[idx];
+      const filename = card?.getCurrentFilename?.();
+      if (filename) items.push({ filename, name: card.getTitle?.() || `clip-${idx + 1}` });
+    }
+    if (items.length === 0) {
+      setBatch(b => ({ ...b, error: 'Selected clips have no file to download yet.' }));
+      return;
+    }
+    try {
+      const res = await fetch(getApiUrl('/api/batch/download'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId, items }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'openshorts_clips.zip';
+      document.body.appendChild(a); a.click();
+      window.URL.revokeObjectURL(url); document.body.removeChild(a);
+    } catch (e) {
+      setBatch(b => ({ ...b, error: 'Download failed: ' + e.message }));
+    }
   };
 
   // Keep a stable timestamp per log line: only assign a time to newly-seen
@@ -1001,10 +1091,22 @@ function App() {
 
                 <div className="flex-1 overflow-y-auto custom-scrollbar p-1">
                   {results && results.clips && results.clips.length > 0 ? (
+                    <>
+                    <BatchBar
+                      selectedCount={selected.size}
+                      totalCount={results.clips.length}
+                      onToggleSelectAll={toggleSelectAll}
+                      subtitlePresets={subtitlePresets}
+                      batch={batch}
+                      onApply={runBatch}
+                      onDownload={downloadSelectedZip}
+                      onCancel={cancelBatch}
+                    />
                     <div className={`grid gap-4 pb-10 ${status === 'complete' ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1'}`}>
                       {results.clips.map((clip, i) => (
                         <ResultCard
                           key={i}
+                          ref={(el) => { cardRefs.current[i] = el; }}
                           clip={clip}
                           index={i}
                           jobId={jobId}
@@ -1014,9 +1116,13 @@ function App() {
                           elevenLabsKey={elevenLabsKey}
                           onPlay={(time) => handleClipPlay(time)}
                           onPause={handleClipPause}
+                          selectable={true}
+                          selected={selected.has(i)}
+                          onToggleSelected={toggleSelected}
                         />
                       ))}
                     </div>
+                    </>
                   ) : (
                     status === 'processing' ? (
                       <div className="h-full flex flex-col items-center justify-center text-zinc-500 space-y-4 opacity-50">

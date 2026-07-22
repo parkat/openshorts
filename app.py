@@ -1,5 +1,8 @@
 import os
+import io
+import re
 import uuid
+import zipfile
 import subprocess
 import threading
 import json
@@ -13,7 +16,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
 
@@ -231,6 +234,121 @@ app.mount("/videos", StaticFiles(directory=OUTPUT_DIR), name="videos")
 THUMBNAILS_DIR = os.path.join(OUTPUT_DIR, "thumbnails")
 os.makedirs(THUMBNAILS_DIR, exist_ok=True)
 app.mount("/thumbnails", StaticFiles(directory=THUMBNAILS_DIR), name="thumbnails")
+
+# ---------------------------------------------------------------------------
+# Edit presets (backend-synced, so they're available on every device) + batch
+# download. Presets live in the project dir (bind-mounted), NOT in OUTPUT_DIR
+# which is periodically purged. A preset is { id, name, kind, settings, updated }.
+# ---------------------------------------------------------------------------
+# Persist under the archive mount (writable by the backend, survives the job-
+# retention purge that clears OUTPUT_DIR). Override with PRESETS_FILE if desired.
+PRESETS_FILE = os.environ.get("PRESETS_FILE", os.path.join("archive", "presets.json"))
+_presets_lock = threading.Lock()
+
+def _load_presets() -> list:
+    try:
+        with open(PRESETS_FILE, "r") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+def _write_presets(items: list):
+    d = os.path.dirname(PRESETS_FILE)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    tmp = PRESETS_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(items, f, indent=2)
+    os.replace(tmp, PRESETS_FILE)
+
+def _safe_arcname(name: str, used: set) -> str:
+    """A filesystem-safe, unique .mp4 name for a file inside the batch zip."""
+    base = re.sub(r'[^\w\-. ]+', '_', name or '').strip() or "clip"
+    if not base.lower().endswith(".mp4"):
+        base += ".mp4"
+    candidate, i = base, 1
+    while candidate in used:
+        candidate = f"{base[:-4]}_{i}.mp4"
+        i += 1
+    used.add(candidate)
+    return candidate
+
+class PresetBody(BaseModel):
+    id: Optional[str] = None
+    name: str
+    kind: str = "subtitle"
+    settings: dict = {}
+
+@app.get("/api/presets")
+async def get_presets():
+    return {"presets": _load_presets()}
+
+@app.post("/api/presets")
+async def save_preset(body: PresetBody):
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Preset name is required")
+    with _presets_lock:
+        items = _load_presets()
+        existing = None
+        if body.id:
+            existing = next((p for p in items if p.get("id") == body.id), None)
+        if existing is None:  # de-dupe by (kind, name) so re-saving overwrites
+            existing = next((p for p in items if p.get("kind") == body.kind and p.get("name") == name), None)
+        if existing is not None:
+            existing.update({"name": name, "kind": body.kind, "settings": body.settings, "updated": time.time()})
+            preset = existing
+        else:
+            preset = {"id": uuid.uuid4().hex[:12], "name": name, "kind": body.kind,
+                      "settings": body.settings, "updated": time.time()}
+            items.append(preset)
+        _write_presets(items)
+    return {"preset": preset}
+
+@app.delete("/api/presets/{preset_id}")
+async def delete_preset(preset_id: str):
+    with _presets_lock:
+        items = _load_presets()
+        kept = [p for p in items if p.get("id") != preset_id]
+        if len(kept) == len(items):
+            raise HTTPException(status_code=404, detail="Preset not found")
+        _write_presets(kept)
+    return {"ok": True}
+
+class BatchDownloadItem(BaseModel):
+    filename: str            # basename of the clip's current file in output/<job_id>/
+    name: Optional[str] = None  # desired name inside the zip (e.g. the clip title)
+
+class BatchDownloadBody(BaseModel):
+    job_id: str
+    items: List[BatchDownloadItem]
+
+@app.post("/api/batch/download")
+async def batch_download(body: BatchDownloadBody):
+    """Zip the selected clips' current files (from output/<job_id>/) and stream it."""
+    out_root = os.path.realpath(OUTPUT_DIR)
+    job_dir = os.path.realpath(os.path.join(OUTPUT_DIR, body.job_id))
+    if not (job_dir == out_root or job_dir.startswith(out_root + os.sep)) or not os.path.isdir(job_dir):
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not body.items:
+        raise HTTPException(status_code=400, detail="No clips selected")
+
+    buf = io.BytesIO()
+    used = set()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
+        for item in body.items:
+            safe = os.path.basename(item.filename)  # block path traversal
+            src = os.path.realpath(os.path.join(job_dir, safe))
+            if not src.startswith(job_dir + os.sep) or not os.path.isfile(src):
+                continue
+            zf.write(src, _safe_arcname(item.name or safe, used))
+    if buf.tell() == 0:
+        raise HTTPException(status_code=404, detail="None of the selected files were found")
+    buf.seek(0)
+    fname = f"openshorts_{body.job_id[:8]}_clips.zip"
+    return StreamingResponse(buf, media_type="application/zip",
+                             headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 class ProcessRequest(BaseModel):
     url: str

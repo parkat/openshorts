@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, CheckCircle, AlertCircle, X, Loader2, Copy, Wand2, Type, Calendar, Clock, Languages, Crop, MessageSquare } from 'lucide-react';
+import React, { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
+import { Download, Share2, Instagram, Youtube, Video, CheckCircle, AlertCircle, X, Loader2, Copy, Wand2, Type, Calendar, Clock, Languages, Crop, MessageSquare, Check } from 'lucide-react';
 import { getApiUrl } from '../config';
 import SubtitleModal from './SubtitleModal';
 import HookModal from './HookModal';
@@ -7,8 +7,9 @@ import CropModal from './CropModal';
 import TranslateModal from './TranslateModal';
 import ScriptChatModal from './ScriptChatModal';
 import { renderInBrowser } from '../lib/renderInBrowser';
+import { buildSubtitleConfig, fetchClipCaptions } from '../lib/subtitleConfig';
 
-export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, onPlay, onPause }) {
+const ResultCard = forwardRef(function ResultCard({ clip, index, jobId, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, onPlay, onPause, selectable = false, selected = false, onToggleSelected }, ref) {
     const [showModal, setShowModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
     const videoRef = React.useRef(null);
@@ -42,6 +43,83 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
 
     // Accumulate Remotion layers across operations
     const [activeLayers, setActiveLayers] = useState({ subtitles: null, hook: null, effects: null });
+
+    // Mirror mutable state into refs so the imperative batch handle reads fresh
+    // values (the parent calls these outside React's render/closure cycle).
+    const activeLayersRef = useRef(activeLayers);
+    useEffect(() => { activeLayersRef.current = activeLayers; }, [activeLayers]);
+    const currentUrlRef = useRef(currentVideoUrl);
+    useEffect(() => { currentUrlRef.current = currentVideoUrl; }, [currentVideoUrl]);
+    const clipDurationRef = useRef(clipDuration);
+    useEffect(() => { clipDurationRef.current = clipDuration; }, [clipDuration]);
+
+    const filenameFromUrl = (url) => {
+        if (!url) return null;
+        const clean = url.split('?')[0];
+        const m = clean.match(/\/videos\/[^/]+\/(.+)$/);
+        return decodeURIComponent(m ? m[1] : clean.split('/').pop());
+    };
+
+    // Imperative API driven by the batch runner in App.jsx. Applies the requested
+    // edits as composed layers and renders them together once (server-side).
+    const applyEdits = async ({ subtitleSettings = null, doHook = false, doAutoEdit = false, signal } = {}) => {
+        setIsSubtitling(true);
+        setEditError(null);
+        try {
+            const layers = { ...activeLayersRef.current };
+
+            if (doAutoEdit) {
+                const apiKey = geminiApiKey || localStorage.getItem('gemini_key');
+                if (apiKey) {
+                    const res = await fetch(getApiUrl('/api/effects/generate'), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-Gemini-Key': apiKey },
+                        body: JSON.stringify({ job_id: jobId, clip_index: index, input_filename: filenameFromUrl(currentUrlRef.current) }),
+                        signal,
+                    });
+                    if (res.ok) {
+                        const d = await res.json();
+                        if (d.effects && d.effects.segments) layers.effects = d.effects;
+                    }
+                }
+            }
+
+            if (subtitleSettings) {
+                const { captions } = await fetchClipCaptions(getApiUrl, jobId, index);
+                layers.subtitles = buildSubtitleConfig(subtitleSettings, captions);
+            }
+
+            if (doHook && clip.viral_hook_text) {
+                layers.hook = { text: clip.viral_hook_text, position: 'top', size: 'M', entranceAnimation: 'spring', displayDurationSec: 5 };
+            }
+
+            const url = await renderInBrowser({
+                videoUrl: originalVideoUrl,
+                durationInSeconds: clipDurationRef.current,
+                subtitles: layers.subtitles,
+                hook: layers.hook,
+                effects: layers.effects,
+                jobId, clipIndex: index, signal,
+            });
+            setActiveLayers(layers);
+            setCurrentVideoUrl(url);
+            if (videoRef.current) videoRef.current.load();
+            return { ok: true };
+        } catch (e) {
+            if (e.name === 'AbortError') throw e;
+            setEditError(e.message);
+            setTimeout(() => setEditError(null), 5000);
+            return { ok: false, error: e.message };
+        } finally {
+            setIsSubtitling(false);
+        }
+    };
+
+    useImperativeHandle(ref, () => ({
+        applyEdits,
+        getCurrentFilename: () => filenameFromUrl(currentUrlRef.current),
+        getTitle: () => clip.video_title_for_youtube_short || `clip-${index + 1}`,
+    }));
 
     // Fetch clip duration from transcript endpoint
     useEffect(() => {
@@ -394,7 +472,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
     };
 
     return (
-        <div className="bg-surface border border-white/5 rounded-2xl overflow-hidden flex flex-col md:flex-row group hover:border-white/10 transition-all animate-[fadeIn_0.5s_ease-out] min-h-[300px] h-auto" style={{ animationDelay: `${index * 0.1}s` }}>
+        <div className={`bg-surface border rounded-2xl overflow-hidden flex flex-col md:flex-row group transition-all animate-[fadeIn_0.5s_ease-out] min-h-[300px] h-auto ${selected ? 'border-primary ring-2 ring-primary/60' : 'border-white/5 hover:border-white/10'}`} style={{ animationDelay: `${index * 0.1}s` }}>
             {/* Left: Video Preview (Responsive Width) */}
             <div className="w-full md:w-[180px] lg:w-[200px] bg-black relative shrink-0 aspect-[9/16] md:aspect-auto group/video">
                 <video
@@ -420,6 +498,18 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                         Clip {index + 1}
                     </span>
                 </div>
+
+                {/* Batch selection checkbox */}
+                {selectable && (
+                    <button
+                        onClick={(e) => { e.stopPropagation(); onToggleSelected && onToggleSelected(index); }}
+                        className={`absolute top-3 right-3 z-20 w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${selected ? 'bg-primary border-primary text-white' : 'bg-black/50 border-white/50 text-transparent hover:border-white'}`}
+                        title={selected ? 'Deselect clip' : 'Select clip'}
+                        aria-pressed={selected}
+                    >
+                        <Check size={14} strokeWidth={3} />
+                    </button>
+                )}
 
                 {/* Auto Edit Overlay if Processing */}
                 {isEditing && (
@@ -727,4 +817,6 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
 
         </div>
     );
-}
+});
+
+export default ResultCard;
