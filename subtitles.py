@@ -148,7 +148,7 @@ def hex_to_ass_color(hex_color, opacity=1.0):
 def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
                    font_name="Verdana", font_color="#FFFFFF",
                    border_color="#000000", border_width=2,
-                   bg_color="#000000", bg_opacity=0.0):
+                   bg_color="#000000", bg_opacity=0.0, margin_v=25):
     """
     Burns subtitles into the video using FFmpeg.
     Supports two modes:
@@ -200,7 +200,7 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
         f"BorderStyle={border_style},"
         f"Outline={outline_width},"
         f"Shadow=0,"
-        f"MarginV=25,"
+        f"MarginV={int(margin_v)},"
         f"Bold=1"
     )
 

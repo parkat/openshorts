@@ -8,6 +8,9 @@ services:
       - .:/app
       - /app/__pycache__
       - ./output:/app/output
+      # Persistent archive on the host (outside the project). Expired jobs are copied
+      # here before the cleanup purges them. Set ARCHIVE_HOST_DIR in .env.
+      - ${ARCHIVE_HOST_DIR:-./archive}:/app/archive
     restart: unless-stopped
 
   frontend:

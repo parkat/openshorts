@@ -29,7 +29,10 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # Default to 1 if not set, but user can set higher for powerful servers
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "5"))
 MAX_FILE_SIZE_MB = 2048  # 2GB limit
-JOB_RETENTION_SECONDS = 3600  # 1 hour retention
+# How long finished job folders (clips + metadata) survive before the cleanup task
+# purges them. 1 hour was far too aggressive for a local workflow where you generate
+# clips and then iterate on subtitles/hooks/crops. Default 24h; override via env.
+JOB_RETENTION_SECONDS = int(os.environ.get("JOB_RETENTION_SECONDS", str(24 * 3600)))
 DISABLE_YOUTUBE_URL = os.environ.get("DISABLE_YOUTUBE_URL", "false").lower() in ("1", "true", "yes")
 
 # Application State
@@ -81,6 +84,43 @@ def _relocate_root_job_artifacts(job_id: str, job_output_dir: str) -> bool:
     except Exception:
         return False
 
+ARCHIVE_DIR = os.environ.get("ARCHIVE_DIR", "/app/archive")
+
+
+def archive_job_clips(job_id, job_path):
+    """Copy a job's final clips (in their current edited state) + metadata to the
+    persistent host archive before the folder is purged. Returns count saved.
+    Uses copyfile (no chmod) to avoid EPERM on Windows/WSL bind mounts."""
+    metas = glob.glob(os.path.join(job_path, "*_metadata.json"))
+    if not metas:
+        return 0
+    with open(metas[0], 'r') as f:
+        data = json.load(f)
+    base_name = os.path.basename(metas[0]).replace('_metadata.json', '')
+    dest = os.path.join(ARCHIVE_DIR, base_name)
+    os.makedirs(dest, exist_ok=True)
+
+    clips = data.get('shorts', [])
+    saved = 0
+    for i, clip in enumerate(clips):
+        # video_url reflects the clip's CURRENT state (edited hook/subtitle/recrop),
+        # or is unset for un-edited clips -> fall back to the reframe output name.
+        url = clip.get('video_url')
+        fname = os.path.basename(url) if url else f"{base_name}_clip_{i+1}.mp4"
+        src = os.path.join(job_path, fname)
+        if not os.path.exists(src):
+            continue
+        title = clip.get('video_title_for_youtube_short') or f"clip_{i+1}"
+        safe = "".join(c for c in title if c.isalnum() or c in " -_").strip()[:60] or f"clip_{i+1}"
+        shutil.copyfile(src, os.path.join(dest, f"{i+1:02d}_{safe}.mp4"))
+        saved += 1
+    try:
+        shutil.copyfile(metas[0], os.path.join(dest, "metadata.json"))
+    except Exception:
+        pass
+    return saved
+
+
 async def cleanup_jobs():
     """Background task to remove old jobs and files."""
     import time
@@ -96,6 +136,12 @@ async def cleanup_jobs():
                 job_path = os.path.join(OUTPUT_DIR, job_id)
                 if os.path.isdir(job_path):
                     if now - os.path.getmtime(job_path) > JOB_RETENTION_SECONDS:
+                        # Archive clips to the persistent host folder BEFORE purging.
+                        try:
+                            n = archive_job_clips(job_id, job_path)
+                            print(f"📦 Archived {n} clip(s) from {job_id} to {ARCHIVE_DIR}")
+                        except Exception as e:
+                            print(f"⚠️ Archive failed for {job_id}: {e}")
                         print(f"🧹 Purging old job: {job_id}")
                         shutil.rmtree(job_path, ignore_errors=True)
                         if job_id in jobs:
@@ -320,7 +366,8 @@ async def process_endpoint(
     url: Optional[str] = Form(None),
     acknowledged: Optional[str] = Form(None),
     split_parts: Optional[str] = Form(None),
-    part_length: Optional[str] = Form(None)
+    part_length: Optional[str] = Form(None),
+    layout: Optional[str] = Form(None)
 ):
     api_key = request.headers.get("X-Gemini-Key")
 
@@ -335,6 +382,7 @@ async def process_endpoint(
         ack_flag = bool(body.get("acknowledged"))
         split_flag = bool(body.get("split_parts"))
         part_length = body.get("part_length")
+        layout = body.get("layout")
 
     # Resolve part length (seconds); default 60, clamp to a sane range
     try:
@@ -342,6 +390,9 @@ async def process_endpoint(
     except (TypeError, ValueError):
         part_len = 60
     part_len = max(10, min(part_len, 600))
+
+    # Reframe layout: only 'fit' is meaningful; anything else is the 'auto' default.
+    layout_mode = 'fit' if str(layout).lower() == 'fit' else 'auto'
 
     # Gemini key required only for viral mode (split mode uses no Gemini call)
     if not split_flag and not api_key:
@@ -405,6 +456,9 @@ async def process_endpoint(
 
     if split_flag:
         cmd.extend(["--split-parts", "--part-length", str(part_len)])
+
+    if layout_mode == 'fit':
+        cmd.extend(["--layout", "fit"])
 
     print(f"[attestation] job={job_id} ip={attestation['ip']} source={attestation['source']} ack=true")
 
@@ -607,6 +661,7 @@ class SubtitleRequest(BaseModel):
     job_id: str
     clip_index: int
     position: str = "bottom" # top, middle, bottom
+    margin_v: int = 25 # vertical margin in ASS units (fine position within the zone)
     font_size: int = 16
     font_name: str = "Verdana"
     font_color: str = "#FFFFFF"
@@ -874,7 +929,8 @@ async def add_subtitles(req: SubtitleRequest):
                            alignment=req.position, fontsize=req.font_size,
                            font_name=req.font_name, font_color=req.font_color,
                            border_color=req.border_color, border_width=req.border_width,
-                           bg_color=req.bg_color, bg_opacity=req.bg_opacity)
+                           bg_color=req.bg_color, bg_opacity=req.bg_opacity,
+                           margin_v=req.margin_v)
         
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, run_burn)
@@ -987,6 +1043,128 @@ async def add_hook(req: HookRequest):
         "success": True,
         "new_video_url": f"/videos/{req.job_id}/{output_filename}"
     }
+
+class RecropRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    x: float = 0.5     # horizontal position of crop window: 0=left .. 1=right
+    y: float = 0.5     # vertical position: 0=top .. 1=bottom
+    zoom: float = 1.0  # 1.0 = full source height, higher = tighter crop
+
+
+def _even(n):
+    n = int(n)
+    return n - (n % 2)
+
+
+@app.get("/api/clip/{job_id}/{clip_index}/source")
+async def get_clip_source(job_id: str, clip_index: int):
+    """Report whether the original-aspect (16:9) footage for a clip is retained,
+    and where to load it (for the manual crop editor's preview)."""
+    output_dir = os.path.join(OUTPUT_DIR, job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+    base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+    source_file = f"{base_name}_clip_{clip_index+1}_source.mp4"
+    available = os.path.exists(os.path.join(output_dir, source_file))
+    return {
+        "available": available,
+        "source_url": f"/videos/{job_id}/{source_file}" if available else None,
+    }
+
+
+@app.post("/api/recrop")
+async def recrop_clip(req: RecropRequest):
+    """Re-render one clip from its retained 16:9 source with a new crop window
+    (position + zoom). Non-destructive: writes recrop_*.mp4 and repoints the clip."""
+    job = get_job_or_rehydrate(req.job_id)
+    output_dir = os.path.join(OUTPUT_DIR, req.job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+
+    with open(json_files[0], 'r') as f:
+        data = json.load(f)
+    clips = data.get('shorts', [])
+    if req.clip_index >= len(clips):
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+    source_path = os.path.join(output_dir, f"{base_name}_clip_{req.clip_index+1}_source.mp4")
+    if not os.path.exists(source_path):
+        raise HTTPException(
+            status_code=404,
+            detail="Original footage isn't available for this clip. Manual re-crop only works on clips generated after this feature was added — regenerate the video to enable it.",
+        )
+
+    # Read source dimensions.
+    try:
+        probe = subprocess.check_output([
+            'ffprobe', '-v', 'error', '-select_streams', 'v:0',
+            '-show_entries', 'stream=width,height', '-of', 'csv=p=0:s=x', source_path
+        ]).decode().strip()
+        sw, sh = [int(v) for v in probe.split('x')[:2]]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not read source video: {e}")
+
+    # Clamp inputs.
+    x = min(max(req.x, 0.0), 1.0)
+    y = min(max(req.y, 0.0), 1.0)
+    zoom = min(max(req.zoom, 1.0), 3.0)
+
+    # Crop window is 9:16; height shrinks as zoom grows.
+    crop_h = _even(sh / zoom)
+    crop_w = _even(crop_h * 9 / 16)
+    if crop_w > sw:
+        crop_w = _even(sw)
+        crop_h = _even(crop_w * 16 / 9)
+    if crop_h > sh:
+        crop_h = _even(sh)
+    cx = max(0, _even(x * (sw - crop_w)))
+    cy = max(0, _even(y * (sh - crop_h)))
+
+    # Output matches the pipeline (height = source height; width rounded up to even),
+    # so re-cropped clips are the exact same dimensions as the originals.
+    out_h = _even(sh)
+    out_w = int(out_h * 9 / 16)
+    if out_w % 2 != 0:
+        out_w += 1
+
+    output_filename = f"recrop_{base_name}_clip_{req.clip_index+1}.mp4"
+    output_path = os.path.join(output_dir, output_filename)
+    vf = f"crop={crop_w}:{crop_h}:{cx}:{cy},scale={out_w}:{out_h}"
+    cmd = [
+        'ffmpeg', '-y', '-i', source_path, '-vf', vf,
+        '-c:v', 'libx264', '-crf', '20', '-preset', 'fast',
+        '-pix_fmt', 'yuv420p', '-profile:v', 'high',
+        '-c:a', 'copy', '-movflags', '+faststart', output_path
+    ]
+
+    try:
+        def run_crop():
+            r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            if r.returncode != 0:
+                raise RuntimeError(r.stderr.decode()[-500:])
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, run_crop)
+    except Exception as e:
+        print(f"❌ Recrop Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    new_url = f"/videos/{req.job_id}/{output_filename}"
+    if req.clip_index < len(job['result']['clips']):
+        job['result']['clips'][req.clip_index]['video_url'] = new_url
+    try:
+        clips[req.clip_index]['video_url'] = new_url
+        data['shorts'] = clips
+        with open(json_files[0], 'w') as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        print(f"⚠️ Failed to update metadata after recrop: {e}")
+
+    return {"success": True, "new_video_url": new_url}
+
 
 class TranslateRequest(BaseModel):
     job_id: str

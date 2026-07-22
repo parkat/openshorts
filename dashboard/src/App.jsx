@@ -365,6 +365,7 @@ function App() {
           acknowledged: !!data.acknowledged,
           split_parts: data.clipMode === 'split',
           part_length: data.partLength || 60,
+          layout: data.layout || 'auto',
         });
       } else {
         const formData = new FormData();
@@ -372,6 +373,7 @@ function App() {
         formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
         formData.append('split_parts', data.clipMode === 'split' ? 'true' : 'false');
         formData.append('part_length', String(data.partLength || 60));
+        formData.append('layout', data.layout || 'auto');
         body = formData;
       }
 

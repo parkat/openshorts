@@ -29,8 +29,8 @@ const ANIMATION_OPTIONS = [
 ];
 
 export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessing, videoUrl, jobId, clipIndex, existingHook }) {
-    const [position, setPosition] = useState('bottom');
-    const [fontSize, setFontSize] = useState(24);
+    const [positionY, setPositionY] = useState(85); // vertical %, 0=top .. 100=bottom (single source of truth)
+    const [fontSize, setFontSize] = useState(28);
     const [fontName, setFontName] = useState('Verdana');
     const [fontColor, setFontColor] = useState('#FFFFFF');
     const [highlightColor, setHighlightColor] = useState('#FFDD00');
@@ -95,10 +95,18 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
 
     if (!isOpen) return null;
 
+    // Vertical % -> coarse zone (for the FFmpeg fallback + preset highlighting)
+    const positionZone = positionY <= 33 ? 'top' : positionY >= 66 ? 'bottom' : 'middle';
+    // FFmpeg fallback: map vertical % to an ASS MarginV (PlayResY=288 virtual units).
+    const ffMarginV = positionZone === 'top' ? Math.round((positionY / 100) * 288)
+        : positionZone === 'bottom' ? Math.round(((100 - positionY) / 100) * 288)
+        : 25;
+
     // Build subtitle config for Remotion
     const subtitleConfig = {
         captions,
-        position,
+        position: positionZone,
+        positionY,
         style: {
             fontFamily: fontName,
             fontSize: fontSize * 2.2, // Scale up for 1080p (modal fontSize is for small preview)
@@ -168,11 +176,8 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
                     ) : (
                         <>
                             <video src={videoUrl} className="w-full h-full object-contain opacity-50" muted playsInline />
-                            <div className={`absolute w-full px-8 text-center transition-all duration-300 pointer-events-none flex flex-col items-center justify-center
-                                ${position === 'top' ? 'top-20' : ''}
-                                ${position === 'middle' ? 'top-0 bottom-0' : ''}
-                                ${position === 'bottom' ? 'bottom-20' : ''}
-                            `}>
+                            <div className="absolute left-0 right-0 px-8 text-center transition-all duration-150 pointer-events-none flex flex-col items-center justify-center"
+                                style={{ top: `${positionY}%`, transform: 'translateY(-50%)' }}>
                                 <span style={fallbackPreviewStyle}>
                                     This is how your subtitles<br/>will appear on the video
                                 </span>
@@ -188,19 +193,40 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
                     </h3>
 
                     <div className="space-y-5 flex-1 overflow-y-auto custom-scrollbar pr-1">
-                        {/* Position Selector */}
+                        {/* Position: presets + fine vertical slider */}
                         <div>
                             <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2 block">Position</label>
-                            <div className="grid grid-cols-3 gap-2">
-                                {['top', 'middle', 'bottom'].map((pos) => (
+                            <div className="grid grid-cols-3 gap-2 mb-2">
+                                {[{ k: 'top', v: 12 }, { k: 'middle', v: 50 }, { k: 'bottom', v: 88 }].map((p) => (
                                     <button
-                                        key={pos}
-                                        onClick={() => setPosition(pos)}
-                                        className={`p-2 rounded-lg border text-center text-xs font-medium transition-all ${position === pos ? 'bg-primary/20 border-primary text-white' : 'bg-white/5 border-white/5 text-zinc-400 hover:bg-white/10'}`}
+                                        key={p.k}
+                                        onClick={() => setPositionY(p.v)}
+                                        className={`p-2 rounded-lg border text-center text-xs font-medium transition-all ${positionZone === p.k ? 'bg-primary/20 border-primary text-white' : 'bg-white/5 border-white/5 text-zinc-400 hover:bg-white/10'}`}
                                     >
-                                        {pos.charAt(0).toUpperCase() + pos.slice(1)}
+                                        {p.k.charAt(0).toUpperCase() + p.k.slice(1)}
                                     </button>
                                 ))}
+                            </div>
+                            <input
+                                type="range" min="0" max="100" value={positionY}
+                                onChange={(e) => setPositionY(parseInt(e.target.value))}
+                                className="w-full accent-primary"
+                            />
+                            <div className="flex justify-between text-[10px] text-zinc-500">
+                                <span>Top</span><span>{positionY}%</span><span>Bottom</span>
+                            </div>
+                        </div>
+
+                        {/* Text Size */}
+                        <div>
+                            <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2 block">Text Size</label>
+                            <input
+                                type="range" min="14" max="44" value={fontSize}
+                                onChange={(e) => setFontSize(parseInt(e.target.value))}
+                                className="w-full accent-primary"
+                            />
+                            <div className="flex justify-between text-[10px] text-zinc-500">
+                                <span>Small</span><span>{fontSize}px</span><span>Large</span>
                             </div>
                         </div>
 
@@ -356,7 +382,8 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
 
                     <button
                         onClick={() => onGenerate({
-                            position, fontSize, fontName, fontColor, borderColor, borderWidth, bgColor, bgOpacity,
+                            position: positionZone, positionY, margin_v: ffMarginV,
+                            fontSize, fontName, fontColor, borderColor, borderWidth, bgColor, bgOpacity,
                             // Remotion data
                             remotion: useRemotionPreview ? subtitleConfig : null,
                         })}

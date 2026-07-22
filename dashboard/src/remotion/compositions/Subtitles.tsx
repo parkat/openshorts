@@ -72,7 +72,11 @@ const SubtitleBlock: React.FC<SubtitleBlockProps> = ({
   const currentTimeMs = blockStartMs + (frame / fps) * 1000;
   const activeIndex = getActiveWordIndex(block.words, currentTimeMs);
 
-  const positionStyle = POSITION_MAP[position] ?? POSITION_MAP.bottom;
+  // Fine vertical position (percent from top, center-anchored) overrides the preset.
+  const positionStyle: React.CSSProperties =
+    typeof config.positionY === "number"
+      ? { top: `${config.positionY}%`, bottom: "auto", transform: "translateY(-50%)" }
+      : (POSITION_MAP[position] ?? POSITION_MAP.bottom);
   const fontStack = getFontStack(style.fontFamily);
 
   // Background box style

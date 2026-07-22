@@ -10,6 +10,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [acknowledged, setAcknowledged] = useState(false);
     const [clipMode, setClipMode] = useState('viral');   // 'viral' | 'split'
     const [partLength, setPartLength] = useState(60);    // 60 | 90 | 180
+    const [layout, setLayout] = useState('auto');        // 'auto' (smart crop) | 'fit' (blurred bars)
 
     useEffect(() => {
         fetch(getApiUrl('/api/config'))
@@ -38,9 +39,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
         if (mode === 'url') {
             const cleanUrl = normalizeUrl(url);
             if (!cleanUrl) return;
-            onProcess({ type: 'url', payload: cleanUrl, acknowledged: true, clipMode, partLength });
+            onProcess({ type: 'url', payload: cleanUrl, acknowledged: true, clipMode, partLength, layout });
         } else if (mode === 'file' && file) {
-            onProcess({ type: 'file', payload: file, acknowledged: true, clipMode, partLength });
+            onProcess({ type: 'file', payload: file, acknowledged: true, clipMode, partLength, layout });
         }
     };
 
@@ -124,6 +125,29 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     </div>
                 </div>
             )}
+
+            <div className="mb-4">
+                <p className="text-xs text-zinc-500 mb-2">Reframe</p>
+                <div className="flex gap-2">
+                    {[
+                        { v: 'auto', l: 'Smart Crop', d: 'Tracks & crops the speaker' },
+                        { v: 'fit', l: 'Blurred Bars', d: 'Whole frame, blurred top/bottom' },
+                    ].map((opt) => (
+                        <button
+                            key={opt.v}
+                            type="button"
+                            title={opt.d}
+                            onClick={() => setLayout(opt.v)}
+                            className={`flex-1 py-2 rounded-lg border text-sm font-medium transition-all ${layout === opt.v
+                                ? 'border-primary/50 bg-primary/10 text-primary'
+                                : 'border-white/10 bg-white/5 text-zinc-400 hover:text-white'
+                                }`}
+                        >
+                            {opt.l}
+                        </button>
+                    ))}
+                </div>
+            </div>
 
             <form onSubmit={handleSubmit}>
                 {mode === 'url' ? (

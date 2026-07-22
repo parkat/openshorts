@@ -40,3 +40,8 @@ output/
 skills/
 skills-lock.json
 
+# NVIDIA/CUDA compute cache (created by the GPU container)
+.nv/
+# Local archive of expired clips (host-side; path set via ARCHIVE_HOST_DIR)
+archive/
+

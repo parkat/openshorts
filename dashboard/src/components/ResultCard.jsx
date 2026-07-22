@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, CheckCircle, AlertCircle, X, Loader2, Copy, Wand2, Type, Calendar, Clock, Languages } from 'lucide-react';
+import { Download, Share2, Instagram, Youtube, Video, CheckCircle, AlertCircle, X, Loader2, Copy, Wand2, Type, Calendar, Clock, Languages, Crop } from 'lucide-react';
 import { getApiUrl } from '../config';
 import SubtitleModal from './SubtitleModal';
 import HookModal from './HookModal';
+import CropModal from './CropModal';
 import TranslateModal from './TranslateModal';
 import { renderInBrowser } from '../lib/renderInBrowser';
 
@@ -32,6 +33,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
     const [isTranslating, setIsTranslating] = useState(false);
     const [showHookModal, setShowHookModal] = useState(false);
     const [showTranslateModal, setShowTranslateModal] = useState(false);
+    const [showCropModal, setShowCropModal] = useState(false);
     const [editError, setEditError] = useState(null);
 
     const [clipDuration, setClipDuration] = useState(clip.end && clip.start ? clip.end - clip.start : 30);
@@ -172,6 +174,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                     job_id: jobId,
                     clip_index: index,
                     position: options.position,
+                    margin_v: options.margin_v,
                     font_size: options.fontSize,
                     font_name: options.fontName,
                     font_color: options.fontColor,
@@ -506,6 +509,13 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                     </button>
 
                     <button
+                        onClick={() => setShowCropModal(true)}
+                        className="col-span-1 py-2 bg-gradient-to-r from-sky-600 to-cyan-600 hover:from-sky-500 hover:to-cyan-500 text-white rounded-lg text-xs font-bold shadow-lg shadow-sky-500/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2 mb-1 truncate px-1"
+                    >
+                        <Crop size={14} /> Adjust Crop
+                    </button>
+
+                    <button
                         onClick={() => setShowModal(true)}
                         className="col-span-1 py-2 bg-primary hover:bg-blue-600 text-white rounded-lg text-xs font-bold shadow-lg shadow-primary/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2 truncate px-2"
                     >
@@ -678,6 +688,17 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                 isProcessing={isTranslating}
                 videoUrl={currentVideoUrl}
                 hasApiKey={!!elevenLabsKey}
+            />
+
+            <CropModal
+                isOpen={showCropModal}
+                onClose={() => setShowCropModal(false)}
+                jobId={jobId}
+                clipIndex={index}
+                onApply={(newUrl) => {
+                    setCurrentVideoUrl(newUrl);
+                    if (videoRef.current) videoRef.current.load();
+                }}
             />
 
         </div>

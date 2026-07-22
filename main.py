@@ -28,6 +28,12 @@ load_dotenv()
 # --- Constants ---
 ASPECT_RATIO = 9 / 16
 
+# Reframe layout, set from the --layout CLI flag:
+#   'auto' -> per-scene: TRACK (smart-crop single speaker) or GENERAL (blurred fit)
+#   'fit'  -> force the blurred-background fit layout for every scene (whole frame
+#            visible, blurred bars top/bottom — good for captions/hook, no crop drift)
+REFRAME_LAYOUT = 'auto'
+
 GEMINI_PROMPT_TEMPLATE = """
 You are a senior short-form video editor. Read the ENTIRE transcript and word-level timestamps to choose the 3–15 MOST VIRAL moments for TikTok/IG Reels/YouTube Shorts. Each clip must be between 15 and 60 seconds long.
 
@@ -93,7 +99,19 @@ def _select_yolo_device():
         print(f"⚠️  YOLO: GPU unavailable ({type(e).__name__}: {e}); using CPU.")
         return "cpu"
 
-YOLO_DEVICE = _select_yolo_device()
+# IMPORTANT: resolve this LAZILY, not at import time. _select_yolo_device() calls
+# torch.cuda.*, which initializes torch's CUDA context. On a driver/arch mismatch
+# (e.g. GTX 1060 / sm_61 with torch cu126) that context is left in a poisoned state
+# that then breaks CTranslate2 (faster-whisper) on GPU with "operation not supported".
+# Transcription runs before any reframing, so deferring this keeps CUDA clean for
+# Whisper and only touches torch-CUDA later, when YOLO is actually needed.
+YOLO_DEVICE = None
+
+def get_yolo_device():
+    global YOLO_DEVICE
+    if YOLO_DEVICE is None:
+        YOLO_DEVICE = _select_yolo_device()
+    return YOLO_DEVICE
 
 # --- MediaPipe Setup ---
 # Use standard Face Detection (BlazeFace) for speed
@@ -334,7 +352,7 @@ def detect_person_yolo(frame):
     Returns [x, y, w, h] of the person's 'upper body' approximation.
     """
     # Use the globally loaded model
-    results = model(frame, verbose=False, classes=[0], device=YOLO_DEVICE) # class 0 is person
+    results = model(frame, verbose=False, classes=[0], device=get_yolo_device()) # class 0 is person
     
     if not results:
         return None
@@ -646,8 +664,13 @@ def process_video_to_vertical(input_video, final_output_video):
     cameraman = SmoothedCameraman(OUTPUT_WIDTH, OUTPUT_HEIGHT, original_width, original_height)
     
     # --- New Strategy: Per-Scene Analysis ---
-    print("\n   🤖 Step 3: Analyzing Scenes for Strategy (Single vs Group)...")
-    scene_strategies = analyze_scenes_strategy(input_video, scenes)
+    if REFRAME_LAYOUT == 'fit':
+        # Force the blurred-background fit layout for every scene (no smart-crop).
+        print("\n   🖼️ Step 3: Layout = blurred fit (forced for all scenes).")
+        scene_strategies = ['GENERAL'] * len(scenes)
+    else:
+        print("\n   🤖 Step 3: Analyzing Scenes for Strategy (Single vs Group)...")
+        scene_strategies = analyze_scenes_strategy(input_video, scenes)
     # scene_strategies is a list of 'TRACK' or 'General' corresponding to scenes
     
     print("\n   ✂️ Step 4: Processing video frames...")
@@ -777,19 +800,20 @@ def process_video_to_vertical(input_video, final_output_video):
     return True
 
 def transcribe_video(video_path):
-    print("🎙️  Transcribing video with Faster-Whisper (CPU Optimized)...")
+    print("🎙️  Transcribing video with Faster-Whisper...")
     from faster_whisper import WhisperModel
     
-    # Auto-detect CUDA. Use int8 on GPU (GTX 1060/Pascal has crippled FP16, so int8 DP4A is the
-    # fastest path; NEVER float16 or int8_float16 on Pascal). Clean CPU fallback on any failure.
+    # Try CTranslate2 on CUDA DIRECTLY, then fall back to CPU. Do NOT gate on
+    # torch.cuda.is_available(): that call initializes torch's CUDA context, and on a
+    # driver/arch mismatch (e.g. GTX 1060 + torch cu126, driver < 560) it poisons the
+    # process so CTranslate2's own CUDA init then fails with "operation not supported".
+    # CTranslate2 uses the system CUDA/cuDNN (which match the driver), so a direct try
+    # works when torch's would not. int8 on GPU (Pascal FP16 is crippled — never float16).
     try:
-        if torch.cuda.is_available():
-            model = WhisperModel("base", device="cuda", compute_type="int8")
-            print("   ⚡ Faster-Whisper on CUDA (int8).")
-        else:
-            model = WhisperModel("base", device="cpu", compute_type="int8")
+        model = WhisperModel("base", device="cuda", compute_type="int8")
+        print("   ⚡ Faster-Whisper on CUDA (int8).")
     except Exception as e:
-        print(f"   ⚠️ CUDA Whisper init failed ({e}); falling back to CPU (int8).")
+        print(f"   ⚠️ CUDA Whisper unavailable ({e}); using CPU (int8).")
         model = WhisperModel("base", device="cpu", compute_type="int8")
     
     segments, info = model.transcribe(video_path, word_timestamps=True)
@@ -970,8 +994,11 @@ if __name__ == '__main__':
     parser.add_argument('--skip-analysis', action='store_true', help="Skip AI analysis and convert the whole video.")
     parser.add_argument('--split-parts', action='store_true', help="Split the whole video into consecutive vertical parts instead of AI viral detection.")
     parser.add_argument('--part-length', type=int, default=60, help="Length in seconds of each part when using --split-parts (default: 60).")
+    parser.add_argument('--layout', type=str, choices=['auto', 'fit'], default='auto',
+                        help="Reframe layout: 'auto' smart-crops single speakers and fits groups; 'fit' forces a blurred-background fit layout (whole frame visible, blurred bars for captions/hook).")
 
     args = parser.parse_args()
+    REFRAME_LAYOUT = args.layout
 
     script_start_time = time.time()
     
@@ -1084,10 +1111,13 @@ if __name__ == '__main__':
                 
                 if success:
                     print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
-                
-                # Clean up temp cut
+
+                # Retain the original-aspect (16:9) clip segment as *_source.mp4 so the
+                # clip can be manually re-cropped later without the full source video or
+                # a re-download. Small (one clip's duration) and cleaned up with the job.
+                clip_source_path = os.path.join(output_dir, f"{video_title}_clip_{i+1}_source.mp4")
                 if os.path.exists(clip_temp_path):
-                    os.remove(clip_temp_path)
+                    os.replace(clip_temp_path, clip_source_path)
 
     # Clean up original if requested
     if args.url and not args.keep_original and os.path.exists(input_video):
