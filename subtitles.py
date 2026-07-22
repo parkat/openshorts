@@ -204,17 +204,26 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
         f"Bold=1"
     )
 
-    cmd = [
-        'ffmpeg', '-y',
-        '-i', video_path,
-        '-vf', f"subtitles='{safe_srt_path}':force_style='{style_string}'",
-        '-c:a', 'copy',
-        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
-        output_path
-    ]
+    def _burn(codec_args):
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', video_path,
+            '-vf', f"subtitles='{safe_srt_path}':force_style='{style_string}'",
+            '-c:a', 'copy',
+            *codec_args,
+            output_path
+        ]
+        print(f"🎬 Burning subtitles: {' '.join(cmd)}")
+        return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
-    print(f"🎬 Burning subtitles: {' '.join(cmd)}")
-    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    # Prefer the GPU (NVENC): the CPU x264 encode of a 1080p vertical clip can run
+    # well over Cloudflare's fixed 100s proxy limit, so adding subtitles remotely
+    # 524'd. NVENC finishes in seconds. Fall back to x264 if the GPU isn't present
+    # (this box gets repurposed for other GPU work / wiped), so it never hard-fails.
+    result = _burn(['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '23', '-pix_fmt', 'yuv420p'])
+    if result.returncode != 0:
+        print(f"⚠️ NVENC burn failed, falling back to libx264: {result.stderr.decode()[:300]}")
+        result = _burn(['-c:v', 'libx264', '-preset', 'fast', '-crf', '23'])
 
     if result.returncode != 0:
         print(f"❌ FFmpeg Subtitle Error: {result.stderr.decode()}")
