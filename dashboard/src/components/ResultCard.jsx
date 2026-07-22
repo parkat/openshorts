@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, CheckCircle, AlertCircle, X, Loader2, Copy, Wand2, Type, Calendar, Clock, Languages, Crop } from 'lucide-react';
+import { Download, Share2, Instagram, Youtube, Video, CheckCircle, AlertCircle, X, Loader2, Copy, Wand2, Type, Calendar, Clock, Languages, Crop, MessageSquare } from 'lucide-react';
 import { getApiUrl } from '../config';
 import SubtitleModal from './SubtitleModal';
 import HookModal from './HookModal';
 import CropModal from './CropModal';
 import TranslateModal from './TranslateModal';
+import ScriptChatModal from './ScriptChatModal';
 import { renderInBrowser } from '../lib/renderInBrowser';
 
 export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, onPlay, onPause }) {
@@ -34,6 +35,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
     const [showHookModal, setShowHookModal] = useState(false);
     const [showTranslateModal, setShowTranslateModal] = useState(false);
     const [showCropModal, setShowCropModal] = useState(false);
+    const [showScriptChat, setShowScriptChat] = useState(false);
     const [editError, setEditError] = useState(null);
 
     const [clipDuration, setClipDuration] = useState(clip.end && clip.start ? clip.end - clip.start : 30);
@@ -98,6 +100,8 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                         subtitles: newLayers.subtitles,
                         hook: newLayers.hook,
                         effects: newLayers.effects,
+                        jobId,
+                        clipIndex: index,
                     });
                     setCurrentVideoUrl(blobUrl);
                     if (videoRef.current) videoRef.current.load();
@@ -159,6 +163,8 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                     subtitles: newLayers.subtitles,
                     hook: newLayers.hook,
                     effects: newLayers.effects,
+                    jobId,
+                    clipIndex: index,
                 });
                 setCurrentVideoUrl(blobUrl);
                 if (videoRef.current) videoRef.current.load();
@@ -215,6 +221,8 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                     subtitles: newLayers.subtitles,
                     hook: newLayers.hook,
                     effects: newLayers.effects,
+                    jobId,
+                    clipIndex: index,
                 });
                 setCurrentVideoUrl(blobUrl);
                 if (videoRef.current) videoRef.current.load();
@@ -516,6 +524,13 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                     </button>
 
                     <button
+                        onClick={() => setShowScriptChat(true)}
+                        className="col-span-1 py-2 bg-gradient-to-r from-fuchsia-600 to-indigo-600 hover:from-fuchsia-500 hover:to-indigo-500 text-white rounded-lg text-xs font-bold shadow-lg shadow-fuchsia-500/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2 mb-1 truncate px-1"
+                    >
+                        <MessageSquare size={14} className="shrink-0" /> AI Copy
+                    </button>
+
+                    <button
                         onClick={() => setShowModal(true)}
                         className="col-span-1 py-2 bg-primary hover:bg-blue-600 text-white rounded-lg text-xs font-bold shadow-lg shadow-primary/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2 truncate px-2"
                     >
@@ -699,6 +714,15 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                     setCurrentVideoUrl(newUrl);
                     if (videoRef.current) videoRef.current.load();
                 }}
+            />
+
+            <ScriptChatModal
+                isOpen={showScriptChat}
+                onClose={() => setShowScriptChat(false)}
+                jobId={jobId}
+                clipIndex={index}
+                geminiApiKey={geminiApiKey}
+                clipTitle={clip.video_title_for_youtube_short || clip.title || ''}
             />
 
         </div>

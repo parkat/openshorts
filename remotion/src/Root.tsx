@@ -84,6 +84,22 @@ export const RemotionRoot: React.FC = () => {
         width={DEFAULT_PROPS.width}
         height={DEFAULT_PROPS.height}
         defaultProps={DEFAULT_PROPS}
+        // Derive real duration/dimensions from the render request instead of the
+        // hardcoded 30s/1080x1920 defaults, so a rendered short matches the actual
+        // clip length (no trailing frozen frame, no 30s truncation).
+        calculateMetadata={({ props }) => {
+          const p = props as unknown as ShortVideoProps;
+          const pos = (v: number | undefined, fallback: number) =>
+            typeof v === "number" && v > 0 ? v : fallback;
+          return {
+            durationInFrames: Math.round(
+              pos(p.durationInFrames, DEFAULT_PROPS.durationInFrames)
+            ),
+            fps: pos(p.fps, DEFAULT_PROPS.fps),
+            width: Math.round(pos(p.width, DEFAULT_PROPS.width)),
+            height: Math.round(pos(p.height, DEFAULT_PROPS.height)),
+          };
+        }}
       />
     </>
   );

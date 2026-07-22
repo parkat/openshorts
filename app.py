@@ -529,6 +529,7 @@ from subtitles import generate_srt, burn_subtitles, generate_srt_from_video
 from hooks import add_hook_to_video
 from translate import translate_video, get_supported_languages
 from thumbnail import analyze_video_for_titles, refine_titles, generate_thumbnail, generate_youtube_description
+from clip_chat import chat_about_clip
 
 class EditRequest(BaseModel):
     job_id: str
@@ -716,6 +717,75 @@ async def get_clip_transcript(job_id: str, clip_index: int):
         "durationSec": duration_sec,
         "language": transcript.get('language', 'en'),
     }
+
+
+def _build_clip_script(job_id: str, clip_index: int) -> str:
+    """Load a clip's spoken script (the words within its time range) from metadata."""
+    output_dir = os.path.join(OUTPUT_DIR, job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+    with open(json_files[0], 'r') as f:
+        data = json.load(f)
+    transcript = data.get('transcript')
+    clips = data.get('shorts', [])
+    if not transcript or clip_index >= len(clips):
+        raise HTTPException(status_code=404, detail="Clip or transcript not found")
+    clip_data = clips[clip_index]
+    clip_start = clip_data.get('start', 0)
+    clip_end = clip_data.get('end', 0)
+
+    # Prefer word-level text; fall back to segment-level text.
+    words = []
+    for segment in transcript.get('segments', []):
+        for w in segment.get('words', []):
+            if w.get('end', 0) > clip_start and w.get('start', 0) < clip_end:
+                t = (w.get('word') or '').strip()
+                if t:
+                    words.append(t)
+    script = " ".join(words).strip()
+    if not script:
+        parts = []
+        for segment in transcript.get('segments', []):
+            if segment.get('end', 0) > clip_start and segment.get('start', 0) < clip_end:
+                parts.append((segment.get('text') or '').strip())
+        script = " ".join(p for p in parts if p).strip()
+    return script
+
+
+class ClipChatRequest(BaseModel):
+    message: str
+    history: Optional[List[dict]] = None
+
+
+@app.post("/api/clip/{job_id}/{clip_index}/chat")
+async def clip_chat(
+    job_id: str,
+    clip_index: int,
+    req: ClipChatRequest,
+    x_gemini_key: Optional[str] = Header(None, alias="X-Gemini-Key")
+):
+    """Chat with Gemini about a single clip's transcript (titles, descriptions, hashtags...)."""
+    api_key = x_gemini_key or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
+    if not req.message or not req.message.strip():
+        raise HTTPException(status_code=400, detail="Message is required")
+
+    get_job_or_rehydrate(job_id)
+    script = _build_clip_script(job_id, clip_index)
+    if not script:
+        script = "(No transcript text is available for this clip.)"
+
+    try:
+        loop = asyncio.get_event_loop()
+        reply = await loop.run_in_executor(
+            None, chat_about_clip, api_key, script, req.message, req.history
+        )
+        return {"reply": reply, "script": script}
+    except Exception as e:
+        print(f"❌ Clip Chat Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # --- Remotion Render Proxy ---

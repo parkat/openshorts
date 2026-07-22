@@ -1,6 +1,5 @@
 import React from "react";
-import { AbsoluteFill } from "remotion";
-import { Video } from "@remotion/media";
+import { AbsoluteFill, Video } from "remotion";
 import type { ShortVideoProps } from "../lib/types";
 import { Subtitles } from "./Subtitles";
 import { HookOverlay } from "./HookOverlay";
@@ -8,7 +7,10 @@ import { VideoEffects } from "./VideoEffects";
 
 /**
  * Main composition that layers all post-processing on top of the base video.
- * Uses @remotion/media Video for browser-side rendering compatibility.
+ * Uses the classic remotion <Video> (HTML5 <video> element) so the in-modal
+ * Player preview decodes H.264 natively in the browser. Actual exports are
+ * rendered server-side by the render-service (which uses OffthreadVideo/ffmpeg),
+ * so this composition is only used for live preview here.
  */
 export const ShortVideo: React.FC<Record<string, unknown>> = (rawProps) => {
   const { videoUrl, subtitles, hook, effects } =
