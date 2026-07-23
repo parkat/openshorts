@@ -28,24 +28,29 @@ def keywords(shot, limit=4):
 
 
 def search(query, key, per_page=20):
-    r = requests.get(API, params={"key": key, "q": query, "per_page": per_page,
-                                  "safesearch": "true"}, timeout=30)
+    # video_type=film -> real footage (not animation), which is the whole point of
+    # moving off AI visuals. safesearch on. q is URL-encoded by requests (<=100 chars).
+    r = requests.get(API, params={"key": key, "q": query[:100], "per_page": per_page,
+                                  "video_type": "film", "safesearch": "true"}, timeout=30)
     r.raise_for_status()
     return r.json().get("hits", [])
 
 
 def best_clip(hits):
-    """Pick a download URL: prefer vertical (portrait), then higher resolution."""
+    """Pick a download URL. Per the docs, `large` can come back empty (url="",
+    size 0) while `medium` is available for ALL videos — so take the biggest
+    NON-EMPTY stream per hit, then prefer vertical clips and higher resolution."""
     best, best_score = None, -1
     for h in hits:
         vids = h.get("videos") or {}
-        v = vids.get("large") or vids.get("medium") or vids.get("small") or {}
-        url, w, ht = v.get("url"), v.get("width", 0), v.get("height", 0)
-        if not url:
+        stream = next((vids[s] for s in ("large", "medium", "small", "tiny")
+                       if (vids.get(s) or {}).get("url") and vids[s].get("size")), None)
+        if not stream:
             continue
-        score = (10000 if ht > w else 0) + min(ht, 1920)
+        w, ht = stream.get("width", 0), stream.get("height", 0)
+        score = (10000 if ht > w else 0) + min(ht, 2160)
         if score > best_score:
-            best, best_score = url, score
+            best, best_score = stream["url"], score
     return best
 
 

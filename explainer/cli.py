@@ -183,6 +183,8 @@ def cmd_assets(args):
                 from explainer.assets import stock
                 print(f"fetching stock b-roll for {n_broll} figure/broll shot(s) …", flush=True)
                 sa, got = stock.gather_stock(shots, proj_dir, sa, os.environ["PIXABAY"])
+                if got:
+                    manifest["footage_credit"] = "Pixabay"  # attribution (Pixabay's kind request)
                 print(f"  stock clips: {got}/{n_broll}"
                       + ("" if got == n_broll else "  (unmatched shots fall back to text)"))
             else:

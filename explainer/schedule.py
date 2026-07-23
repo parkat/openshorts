@@ -14,6 +14,7 @@ are unit-testable; the HTTP + store writes live in `schedule_project` / `tick`.
 """
 import os
 import glob
+import json
 import datetime
 from zoneinfo import ZoneInfo
 
@@ -69,19 +70,22 @@ def _credits(script):
     return " · ".join(out)
 
 
-def build_descriptions(script):
+def build_descriptions(script, footage_credit=None):
     """Per-platform caption text (from the script's captions) + a credits line.
 
     Falls back to the title when a platform caption is missing so we never post
-    an empty description."""
+    an empty description. `footage_credit` (e.g. "Pixabay") is appended per that
+    provider's attribution request."""
     caps = script.get("captions") or {}
     title = script.get("title") or ""
     credits = _credits(script)
+    parts = ([f"Credits: {credits}"] if credits else []) + (
+        [f"Footage: {footage_credit}"] if footage_credit else [])
     out = {}
     for p in PLATFORMS:
         text = (caps.get(p) or title).strip()
-        if credits:
-            text = f"{text}\n\nCredits: {credits}".strip()
+        if parts:
+            text = (text + "\n\n" + "  ·  ".join(parts)).strip()
         out[p] = text
     return out
 
@@ -168,7 +172,16 @@ def schedule_project(project_id, s=None, now=None, backend_url=None):
         if not channels:
             raise ValueError("no Buffer channels resolved for the brand platforms")
 
-        descriptions = build_descriptions(draft.script or {})
+        # Footage attribution (e.g. Pixabay) recorded by the assets stage.
+        footage_credit = None
+        apath = os.path.join(OUTPUT_DIR, job_id_for(project_id), "assets.json")
+        if os.path.isfile(apath):
+            try:
+                with open(apath, encoding="utf-8") as af:
+                    footage_credit = (json.load(af) or {}).get("footage_credit")
+            except (ValueError, OSError):
+                pass
+        descriptions = build_descriptions(draft.script or {}, footage_credit)
         title = (draft.script or {}).get("title") or proj.title
         # Attach per-service text.
         for ch in channels:
