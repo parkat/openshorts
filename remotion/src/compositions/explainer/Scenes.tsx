@@ -3,12 +3,70 @@ import {
   AbsoluteFill,
   Img,
   OffthreadVideo,
+  Sequence,
   interpolate,
+  random,
   spring,
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
 import type { ExplainerScene, ExplainerTheme } from "../../lib/explainer-types";
+
+// Short-form retention: hard-cut to a new visual roughly this often.
+const BEAT_SEC = 1.8;
+
+/** Ken Burns pan/zoom on a still — constant slow motion so nothing sits static.
+ * Direction/scale vary by seed so consecutive beats don't move identically. */
+const KenBurns: React.FC<{ src: string; seed: number }> = ({ src, seed }) => {
+  const frame = useCurrentFrame();
+  const { durationInFrames } = useVideoConfig();
+  const t = interpolate(frame, [0, Math.max(1, durationInFrames)], [0, 1], {
+    extrapolateRight: "clamp",
+  });
+  const zoomIn = random(`z${seed}`) > 0.5;
+  const scale = zoomIn ? 1.06 + 0.14 * t : 1.2 - 0.14 * t;
+  const panX = (random(`x${seed}`) - 0.5) * 6 * t;
+  const panY = (random(`y${seed}`) - 0.5) * 6 * t;
+  return (
+    <Img
+      src={src}
+      style={{
+        width: "100%",
+        height: "100%",
+        objectFit: "cover",
+        transform: `scale(${scale}) translate(${panX}%, ${panY}%)`,
+      }}
+    />
+  );
+};
+
+/** Split a shot's image(s) into ~BEAT_SEC hard-cut beats, cycling the images so a
+ * longer shot keeps cutting (jump-cut energy) instead of holding one frame. */
+const ImageBeats: React.FC<{ images: string[]; theme: ExplainerTheme }> = ({
+  images,
+}) => {
+  const { durationInFrames, fps } = useVideoConfig();
+  const beatFrames = Math.max(1, Math.round(BEAT_SEC * fps));
+  const nBeats = Math.max(1, Math.round(durationInFrames / beatFrames));
+  const each = Math.ceil(durationInFrames / nBeats);
+  return (
+    <>
+      {Array.from({ length: nBeats }).map((_, b) => (
+        <Sequence key={b} from={b * each} durationInFrames={each} layout="none">
+          <AbsoluteFill>
+            <KenBurns src={images[b % images.length]} seed={b + 1} />
+          </AbsoluteFill>
+        </Sequence>
+      ))}
+    </>
+  );
+};
+
+function sceneImages(scene: ExplainerScene): string[] {
+  if (scene.images && scene.images.length) return scene.images;
+  if (scene.imageUrl) return [scene.imageUrl];
+  return [];
+}
 
 /**
  * Scene renderers for ExplainerShort. Each takes a scene + theme and fills the
@@ -167,16 +225,19 @@ export const MotionTextScene: React.FC<SceneProps> = ({ scene, theme }) => {
   );
 };
 
-/** Source figure / page screenshot, matted on the cream field. */
+/** Source figure / page screenshot, matted on the cream field with Ken Burns +
+ * jump-cuts between stills. Falls back to a title card if no image was generated. */
 export const FigureScene: React.FC<SceneProps> = ({ scene, theme }) => {
   const e = useEntrance();
+  const images = sceneImages(scene);
+  if (!images.length) return <SlideScene scene={scene} theme={theme} />;
   return (
     <AbsoluteFill
       style={{
         backgroundColor: theme.bg,
         justifyContent: "center",
         alignItems: "center",
-        padding: 70,
+        padding: 60,
       }}
     >
       <div
@@ -191,7 +252,7 @@ export const FigureScene: React.FC<SceneProps> = ({ scene, theme }) => {
           backgroundColor: "#fff",
         }}
       >
-        <CoverMedia scene={scene} kind="img" />
+        <ImageBeats images={images} theme={theme} />
       </div>
     </AbsoluteFill>
   );
@@ -224,11 +285,21 @@ export const AccentClipScene: React.FC<SceneProps> = ({ scene, theme }) => {
   );
 };
 
-/** AI b-roll video (full-bleed). */
-export const BrollScene: React.FC<SceneProps> = ({ scene }) => {
+/** B-roll: real video if present, else Ken Burns over generated stills (the
+ * cheap default — HANDOFF §11 keeps video spend down). Falls back to a slide. */
+export const BrollScene: React.FC<SceneProps> = ({ scene, theme }) => {
+  if (scene.videoUrl) {
+    return (
+      <AbsoluteFill style={{ backgroundColor: "#000" }}>
+        <CoverMedia scene={scene} kind="video" />
+      </AbsoluteFill>
+    );
+  }
+  const images = sceneImages(scene);
+  if (!images.length) return <SlideScene scene={scene} theme={theme} />;
   return (
     <AbsoluteFill style={{ backgroundColor: "#000" }}>
-      <CoverMedia scene={scene} kind="video" />
+      <ImageBeats images={images} theme={theme} />
     </AbsoluteFill>
   );
 };

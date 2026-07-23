@@ -166,10 +166,18 @@ def cmd_assets(args):
                 manifest["clip_flags"] = res["flags"]
                 job_id = rnd.job_id_for(args.project_id)
                 sa = rnd.shot_assets_from_clips(shots, res["clips"], job_id)
-            manifest["shot_assets"] = {str(k): v for k, v in sa.items()}
             for f in manifest["clip_flags"]:
                 mark = "⛔" if f["level"] == "block" else "⚠️"
                 print(f"  {mark} {f['code']}: {f['message']}")
+
+        # 1b) Generate on-brand stills for figure/broll shots (Ken Burns + jump-cuts).
+        if not args.no_visuals:
+            from explainer.assets import visuals as vis
+            n_img = sum(1 for sh in shots if sh.get("visual") in vis._IMAGE_SHOTS)
+            if n_img:
+                print(f"generating stills for {n_img} figure/broll shot(s) …", flush=True)
+                sa = vis.gather_visuals(shots, proj_dir, sa)
+        manifest["shot_assets"] = {str(k): v for k, v in sa.items()}
 
         # 2) Narration. Soundbite shorts assemble a mixed timeline (Orus + silence
         #    gaps where the clip speaks); otherwise a single continuous TTS read.
@@ -433,6 +441,7 @@ def main():
     ap.add_argument("--tone", default=None,
                     help="TTS delivery tone (default: brand; 'none' to disable)")
     ap.add_argument("--no-clips", action="store_true", help="skip accent-clip fetch")
+    ap.add_argument("--no-visuals", action="store_true", help="skip generated stills")
     ap.add_argument("--no-music", action="store_true", help="skip the music bed")
     ap.set_defaults(func=cmd_assets)
 

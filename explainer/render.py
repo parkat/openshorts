@@ -22,8 +22,8 @@ FPS = 30
 WIDTH = 1080
 HEIGHT = 1920
 
-# Scene types that require a media asset; without one they fall back to text.
-_MEDIA_SCENES = {"figure": "imageUrl", "accent_clip": "videoUrl", "broll": "videoUrl"}
+# Scene types that want a media asset; without one they fall back to a text slide.
+_MEDIA_SCENES = {"figure", "accent_clip", "broll"}
 
 
 def job_id_for(project_id):
@@ -84,21 +84,25 @@ def build_scene_list(alignment, assets=None):
             "endMs": int(shot.get("endMs", 0)),
             "role": shot.get("role") or "",
         }
-        media_key = _MEDIA_SCENES.get(visual)
-        if media_key:
-            url = a.get(media_key)
-            if url:
-                scene[media_key] = url
-                if visual == "accent_clip":
-                    src = shot.get("source")
-                    scene["attribution"] = a.get("attribution") or (
-                        f"via {src}" if src and src != "general" else ""
-                    )
-                    # Soundbite shots let the clip's own audio play (Hinton speaks);
-                    # plain b-roll accents stay ducked/muted under the narration.
-                    scene["duckAudio"] = not shot.get("speaks")
-            else:
-                # No asset yet — show the point as a title card instead.
+        if visual in _MEDIA_SCENES:
+            # Attach whatever media was supplied (images/stills or a video clip).
+            if a.get("images"):
+                scene["images"] = a["images"]
+            if a.get("imageUrl"):
+                scene["imageUrl"] = a["imageUrl"]
+            if a.get("videoUrl"):
+                scene["videoUrl"] = a["videoUrl"]
+            has_media = any(scene.get(k) for k in ("images", "imageUrl", "videoUrl"))
+            if visual == "accent_clip" and scene.get("videoUrl"):
+                src = shot.get("source")
+                scene["attribution"] = a.get("attribution") or (
+                    f"via {src}" if src and src != "general" else ""
+                )
+                # Soundbite shots let the clip's own audio play (Hinton speaks);
+                # plain b-roll accents stay ducked/muted under the narration.
+                scene["duckAudio"] = not shot.get("speaks")
+            if not has_media:
+                # No footage/stills — show the point as a title card instead.
                 scene["type"] = "slide"
                 scene["text"] = _headline(shot)
         else:
