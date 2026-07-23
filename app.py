@@ -16,9 +16,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from pydantic import BaseModel
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
+import buffer_client
 
 load_dotenv()
 
@@ -349,6 +350,106 @@ async def batch_download(body: BatchDownloadBody):
     fname = f"openshorts_{body.job_id[:8]}_clips.zip"
     return StreamingResponse(buf, media_type="application/zip",
                              headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+# ---------------------------------------------------------------------------
+# Buffer social posting: publicly host the clip via an unguessable token on the
+# no-Access media subdomain (Buffer fetches video by URL), then createPost per
+# channel. Free-tier limits: 100/15min, 250/day — see buffer_client.
+# ---------------------------------------------------------------------------
+MEDIA_TOKENS_FILE = os.environ.get("MEDIA_TOKENS_FILE", os.path.join("archive", "media_tokens.json"))
+MEDIA_BASE_URL = os.environ.get("MEDIA_BASE_URL", "https://media.parkat.us").rstrip("/")
+_media_lock = threading.Lock()
+
+def _load_media_tokens() -> dict:
+    try:
+        with open(MEDIA_TOKENS_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def _write_media_tokens(d: dict):
+    p = os.path.dirname(MEDIA_TOKENS_FILE)
+    if p:
+        os.makedirs(p, exist_ok=True)
+    tmp = MEDIA_TOKENS_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(d, f)
+    os.replace(tmp, MEDIA_TOKENS_FILE)
+
+def _mint_media_token(job_id: str, filename: str) -> str:
+    token = uuid.uuid4().hex
+    with _media_lock:
+        toks = _load_media_tokens()
+        toks[token] = {"job_id": job_id, "filename": os.path.basename(filename)}
+        _write_media_tokens(toks)
+    return token
+
+@app.api_route("/m/{token}", methods=["GET", "HEAD"])
+async def serve_media(token: str):
+    """Public (no-Access) tokenized clip stream — media.parkat.us/m/<token>.
+    HEAD is supported because Buffer probes the URL with HEAD before accepting it."""
+    entry = _load_media_tokens().get(token)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Not found")
+    out_root = os.path.realpath(OUTPUT_DIR)
+    path = os.path.realpath(os.path.join(OUTPUT_DIR, entry["job_id"], entry["filename"]))
+    if not (path.startswith(out_root + os.sep)) or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(path, media_type="video/mp4")
+
+class BufferPostChannel(BaseModel):
+    id: str
+    service: str
+    text: str = ""
+
+class BufferPostBody(BaseModel):
+    job_id: str
+    clip_index: int
+    filename: str            # current file basename in output/<job_id>/
+    title: Optional[str] = None   # used as the YouTube title
+    channels: List[BufferPostChannel]
+    schedule_iso: Optional[str] = None   # ISO8601 -> customScheduled; else addToQueue
+    scheduling: str = "automatic"        # 'automatic' | 'notification'
+
+def _buffer_key(header_key):
+    """Prefer the browser-supplied key; fall back to the server-side BUFFER env
+    (lets the headless scheduler post, and the UI work without re-entering it)."""
+    key = header_key or os.environ.get("BUFFER")
+    if not key:
+        raise HTTPException(status_code=400, detail="No Buffer API key (set it in Settings, or BUFFER in the server .env).")
+    return key
+
+@app.get("/api/buffer/channels")
+async def buffer_channels(api_key: str = Header(None, alias="X-Buffer-Key")):
+    try:
+        return {"channels": buffer_client.list_channels(_buffer_key(api_key))}
+    except buffer_client.BufferError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/buffer/post")
+async def buffer_post(body: BufferPostBody, api_key: str = Header(None, alias="X-Buffer-Key")):
+    api_key = _buffer_key(api_key)
+    safe = os.path.basename(body.filename)
+    out_root = os.path.realpath(OUTPUT_DIR)
+    path = os.path.realpath(os.path.join(OUTPUT_DIR, body.job_id, safe))
+    if not (path.startswith(out_root + os.sep)) or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Clip file not found")
+    if not body.channels:
+        raise HTTPException(status_code=400, detail="No channels selected")
+
+    video_url = f"{MEDIA_BASE_URL}/m/{_mint_media_token(body.job_id, safe)}"
+    results = []
+    for ch in body.channels:
+        try:
+            post = buffer_client.create_video_post(
+                api_key, ch.id, ch.service, ch.text, video_url,
+                title=body.title, schedule_iso=body.schedule_iso, scheduling=body.scheduling,
+            )
+            results.append({"service": ch.service, "ok": True,
+                            "post_id": post.get("id"), "status": post.get("status")})
+        except buffer_client.BufferError as e:
+            results.append({"service": ch.service, "ok": False, "error": str(e)})
+    return {"video_url": video_url, "results": results}
 
 class ProcessRequest(BaseModel):
     url: str

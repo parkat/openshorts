@@ -12,6 +12,7 @@ import ScheduleWeekModal from './components/ScheduleWeekModal';
 import BatchBar from './components/BatchBar';
 import { getApiUrl } from './config';
 import { listPresets } from './lib/presetsApi';
+import { clipDownloadName } from './lib/downloadName';
 
 // Enhanced "Encryption" using XOR + Base64 with a Salt
 // This is better than plain Base64 but still client-side.
@@ -158,6 +159,10 @@ function App() {
   });
 
   const [uploadUserId, setUploadUserId] = useState(() => localStorage.getItem('uploadUserId') || '');
+  const [bufferKey, setBufferKey] = useState(() => {
+    const stored = localStorage.getItem('bufferKey_v1');
+    return stored ? decrypt(stored) : '';
+  });
   const [userProfiles, setUserProfiles] = useState([]); // List of {username, connected: []}
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [jobId, setJobId] = useState(null);
@@ -256,7 +261,7 @@ function App() {
     for (const idx of indices) {
       const card = cardRefs.current[idx];
       const filename = card?.getCurrentFilename?.();
-      if (filename) items.push({ filename, name: card.getTitle?.() || `clip-${idx + 1}` });
+      if (filename) items.push({ filename, name: clipDownloadName(results.clips[idx]) });
     }
     if (items.length === 0) {
       setBatch(b => ({ ...b, error: 'Selected clips have no file to download yet.' }));
@@ -369,6 +374,11 @@ function App() {
       localStorage.setItem('falKey_v1', encrypt(falKey));
     }
   }, [falKey]);
+
+  useEffect(() => {
+    if (bufferKey) localStorage.setItem('bufferKey_v1', encrypt(bufferKey));
+    else localStorage.removeItem('bufferKey_v1');
+  }, [bufferKey]);
 
   useEffect(() => {
     if (uploadPostKey && userProfiles.length === 0) {
@@ -740,6 +750,24 @@ function App() {
                       Keys are only stored in your browser. They are sent to the backend only to process your request, never stored server-side.
                     </span>
                   </p>
+
+                  <div className="pt-5 mt-1 border-t border-white/10">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-sm text-zinc-300 font-medium">Buffer API Key <span className="text-[10px] text-zinc-600 font-normal">— powers the Post button</span></label>
+                      {bufferKey && <span className="text-[10px] text-green-400">— set</span>}
+                    </div>
+                    <input
+                      type="password"
+                      value={bufferKey}
+                      onChange={(e) => setBufferKey(e.target.value.trim())}
+                      className="input-field"
+                      placeholder="Buffer personal API key"
+                    />
+                    <p className="text-xs text-zinc-500 mt-2 leading-relaxed">
+                      Posts your clips to your Buffer <strong>queue</strong> (TikTok / Instagram Reels / YouTube).
+                      Get it at <a href="https://publish.buffer.com/settings/api" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">publish.buffer.com/settings/api</a>.
+                    </p>
+                  </div>
                 </div>
               </div>
 
@@ -1112,6 +1140,7 @@ function App() {
                           jobId={jobId}
                           uploadPostKey={uploadPostKey}
                           uploadUserId={uploadUserId}
+                          bufferKey={bufferKey}
                           geminiApiKey={apiKey}
                           elevenLabsKey={elevenLabsKey}
                           onPlay={(time) => handleClipPlay(time)}
