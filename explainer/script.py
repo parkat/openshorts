@@ -20,7 +20,11 @@ Shorts channel. Write a 30-45 second vertical Short in a HYPE HOT-TAKE voice:
 - Any shot that states a fact carries a "source" pointer (the source label). Use
   null for pure framing/opinion lines.
 - Suggest a "visual" per shot: slide | motion_text | figure | accent_clip | broll,
-  plus a short visual_note (what to show).
+  plus a short visual_note (the DIRECTION — what to show, for asset selection).
+- "on_screen" is the ACTUAL big text to burn on screen for slide/motion_text shots:
+  a punchy 2-5 word distillation of the line. NOT a stage direction, NOT quotes,
+  NOT "text:"/"split screen:" prefixes. e.g. narration "bigger models are hitting a
+  wall" -> on_screen "SIZE HIT A WALL". Use null for figure/accent_clip/broll shots.
 
 Return ONLY valid JSON (no markdown, no prose) matching exactly:
 {
@@ -28,7 +32,8 @@ Return ONLY valid JSON (no markdown, no prose) matching exactly:
   "hook": "<the opening spoken line>",
   "shots": [
     {"role":"hook|setup|thing|why|button","narration":"<spoken line>",
-     "visual":"slide|motion_text|figure|accent_clip|broll","visual_note":"<short>",
+     "visual":"slide|motion_text|figure|accent_clip|broll","visual_note":"<direction>",
+     "on_screen":"<2-5 word on-screen headline, or null>",
      "source":"<source label or null>","seconds":<int>}
   ],
   "estimated_seconds": <int>,

@@ -47,9 +47,23 @@ def brand_theme():
     }
 
 
+import re
+
+# Leading stage-direction label on a visual_note, e.g. "Split screen:", "Text punch-in:".
+_DIRECTION_PREFIX = re.compile(r"^[A-Za-z][A-Za-z /-]{0,24}:\s*")
+
+
+def _clean_note(note):
+    """Strip a leading stage-direction label so an old draft's visual_note reads as
+    display copy (fallback only — new drafts carry a clean `on_screen`)."""
+    return _DIRECTION_PREFIX.sub("", (note or "").strip())
+
+
 def _headline(shot):
-    """Short on-screen headline for a text scene (the visual note, else narration)."""
-    return (shot.get("visual_note") or shot.get("narration") or "").strip()
+    """On-screen headline for a text scene: the clean `on_screen` phrase if the
+    script provided one, else the direction-stripped visual_note, else narration."""
+    return (shot.get("on_screen") or _clean_note(shot.get("visual_note"))
+            or shot.get("narration") or "").strip()
 
 
 def build_scene_list(alignment, assets=None):
