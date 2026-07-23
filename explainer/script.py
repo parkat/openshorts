@@ -27,8 +27,17 @@ Shorts channel. Write a 30-45 second vertical Short in a HYPE HOT-TAKE voice:
 - Concrete and punchy. No "in this video", no filler, no hedging padding.
 - Any shot that states a fact carries a "source" pointer (the source label). Use
   null for pure framing/opinion lines.
-- Suggest a "visual" per shot: slide | motion_text | figure | accent_clip | broll,
-  plus a short visual_note (the DIRECTION — what to show, for asset selection).
+- Pick a "visual" per shot. CRITICAL — match the type to where the footage comes from:
+  * accent_clip = the SPECIFIC reference speaker's own footage (e.g. Hinton from the
+    pasted videos). Use it for the hook (their face while you narrate) and for every
+    speaks:true soundbite. A NAMED person or a specific show ONLY ever goes here.
+  * broll = a GENERIC concept clip a stock library would have. visual_note MUST be a
+    short searchable stock phrase — "server room", "glowing neural network", "city at
+    night timelapse", "person typing code", "circuit board macro". NEVER a named
+    person / specific show here (stock won't have them).
+  * figure = a data/STAT beat — shown as a big bold number/label on screen (no footage).
+  * motion_text / slide = pure kinetic text beats.
+  visual_note is the direction; for broll keep it to plain stock keywords.
 - "on_screen" is the ACTUAL big text to burn on screen for slide/motion_text shots:
   a punchy 2-5 word distillation of the line. NOT a stage direction, NOT quotes,
   NOT "text:"/"split screen:" prefixes. e.g. narration "bigger models are hitting a
