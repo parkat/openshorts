@@ -170,13 +170,24 @@ def cmd_assets(args):
                 mark = "⛔" if f["level"] == "block" else "⚠️"
                 print(f"  {mark} {f['code']}: {f['message']}")
 
-        # 1b) Generate on-brand stills for figure/broll shots (Ken Burns + jump-cuts).
-        if not args.no_visuals:
-            from explainer.assets import visuals as vis
-            n_img = sum(1 for sh in shots if sh.get("visual") in vis._IMAGE_SHOTS)
-            if n_img:
-                print(f"generating stills for {n_img} figure/broll shot(s) …", flush=True)
+        # 1b) B-roll for figure/broll shots. Default: REAL stock footage (Pixabay,
+        #     commercial-safe, no AI-disclosure label). AI stills only with
+        #     --ai-visuals. Either way, Ken Burns / jump-cuts apply in the render.
+        n_broll = sum(1 for sh in shots if sh.get("visual") in ("figure", "broll"))
+        if not args.no_visuals and n_broll:
+            if args.ai_visuals:
+                from explainer.assets import visuals as vis
+                print(f"generating AI stills for {n_broll} figure/broll shot(s) …", flush=True)
                 sa = vis.gather_visuals(shots, proj_dir, sa)
+            elif os.environ.get("PIXABAY"):
+                from explainer.assets import stock
+                print(f"fetching stock b-roll for {n_broll} figure/broll shot(s) …", flush=True)
+                sa, got = stock.gather_stock(shots, proj_dir, sa, os.environ["PIXABAY"])
+                print(f"  stock clips: {got}/{n_broll}"
+                      + ("" if got == n_broll else "  (unmatched shots fall back to text)"))
+            else:
+                print("  ⚠️ no PIXABAY key in .env — figure/broll shots fall back to text "
+                      "(add PIXABAY, or use --ai-visuals).")
         manifest["shot_assets"] = {str(k): v for k, v in sa.items()}
 
         # 2) Narration. Soundbite shorts assemble a mixed timeline (Orus + silence
@@ -190,13 +201,14 @@ def cmd_assets(args):
         print(f"narrating project #{args.project_id} (voice={voice or 'brand default'}) …", flush=True)
         if soundbite_paths and audio.has_soundbites(shots):
             _, timeline = audio.assemble(shots, soundbite_paths, narration_path,
-                                         tone=tone, **({"voice": voice} if voice else {}))
+                                         tone=tone, speed=args.speed,
+                                         **({"voice": voice} if voice else {}))
             with open(os.path.join(proj_dir, "timeline.json"), "w", encoding="utf-8") as tf:
                 json.dump(timeline, tf, ensure_ascii=False, indent=2)
             secs = (timeline[-1]["end_ms"] / 1000.0) if timeline else 0.0
             print(f"  assembled narration + {len(soundbite_paths)} soundbite(s) → {secs:.1f}s")
         else:
-            _, secs = tts.narrate(script, narration_path, tone=tone,
+            _, secs = tts.narrate(script, narration_path, tone=tone, speed=args.speed,
                                   **({"voice": voice} if voice else {}))
             print(f"  narration → {secs:.1f}s")
         manifest["narration_seconds"] = secs
@@ -441,7 +453,11 @@ def main():
     ap.add_argument("--tone", default=None,
                     help="TTS delivery tone (default: brand; 'none' to disable)")
     ap.add_argument("--no-clips", action="store_true", help="skip accent-clip fetch")
-    ap.add_argument("--no-visuals", action="store_true", help="skip generated stills")
+    ap.add_argument("--no-visuals", action="store_true", help="skip b-roll for figure/broll shots")
+    ap.add_argument("--ai-visuals", action="store_true",
+                    help="use AI-generated stills instead of real stock footage (adds AI label)")
+    ap.add_argument("--speed", type=float, default=1.0,
+                    help="narration tempo multiplier (e.g. 1.15 = 15%% faster, pitch preserved)")
     ap.add_argument("--no-music", action="store_true", help="skip the music bed")
     ap.set_defaults(func=cmd_assets)
 

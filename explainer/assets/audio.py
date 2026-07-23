@@ -14,6 +14,7 @@ Working in PCM means assembly is a pure byte concat — no ffmpeg for the mix �
 timeline is exact.
 """
 import os
+import array
 import wave
 import subprocess
 
@@ -24,6 +25,37 @@ from explainer.assets.tts import styled
 SAMPLE_RATE = 24000
 SAMPLE_WIDTH = 2               # 16-bit
 DEFAULT_VOICE = BRAND.get("voice", "Orus")
+
+
+def trim_silence(pcm, thresh=500, pad_ms=50):
+    """Strip leading/trailing near-silence from a PCM segment (keeps a small pad).
+    Tightens the gaps between per-shot narration segments so the read doesn't drag."""
+    a = array.array("h")
+    a.frombytes(pcm)
+    n = len(a)
+    if not n:
+        return pcm
+    i = 0
+    while i < n and abs(a[i]) < thresh:
+        i += 1
+    if i >= n:
+        return pcm  # all silence — leave as-is
+    j = n - 1
+    while j > i and abs(a[j]) < thresh:
+        j -= 1
+    pad = int(pad_ms / 1000 * SAMPLE_RATE)
+    return a[max(0, i - pad):min(n, j + 1 + pad)].tobytes()
+
+
+def atempo(pcm, factor):
+    """Speed narration by `factor` (pitch preserved) via ffmpeg atempo. 1.0 = no-op."""
+    if not factor or abs(factor - 1.0) < 0.01:
+        return pcm
+    p = subprocess.run(
+        ["ffmpeg", "-f", "s16le", "-ar", str(SAMPLE_RATE), "-ac", "1", "-i", "pipe:0",
+         "-af", f"atempo={factor:.3f}", "-f", "s16le", "pipe:1"],
+        input=pcm, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    return p.stdout or pcm
 
 
 def _is_soundbite(shot):
@@ -51,12 +83,13 @@ def _dur_ms(pcm):
 
 
 def assemble(shots, soundbite_paths, out_path, voice=DEFAULT_VOICE,
-             model=None, key=None, tts=None, tone=None):
+             model=None, key=None, tts=None, tone=None, speed=1.0):
     """Build the master narration WAV + timeline.
 
     `soundbite_paths`: {shot_index: local_clip_path} for the shots that speak.
     `tone`: run-level Gemini style directive; a shot may override via shot["tone"].
-    `tts`: injectable text->pcm fn for testing (defaults to OpenRouter TTS).
+    `speed`: tempo multiplier applied to NARRATED segments only (the soundbite
+    keeps its real pace). `tts`: injectable text->pcm fn for testing.
     Returns (out_path, timeline).
     """
     tts = tts or (lambda text: orc.tts(text, voice=voice, model=model,
@@ -73,7 +106,7 @@ def assemble(shots, soundbite_paths, out_path, voice=DEFAULT_VOICE,
             text = (shot.get("narration") or "").strip()
             if not text:
                 continue
-            pcm = tts(styled(text, shot.get("tone", tone)))
+            pcm = atempo(trim_silence(tts(styled(text, shot.get("tone", tone)))), speed)
             kind = "narration"
         ms = _dur_ms(pcm)
         timeline.append({"shot_index": i, "start_ms": int(cursor),

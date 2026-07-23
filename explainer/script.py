@@ -20,7 +20,10 @@ Shorts channel. Write a 30-45 second vertical Short in a HYPE HOT-TAKE voice:
   so the visual cuts constantly. One idea per shot. Never let a beat run long.
 - Arc: hook -> escalate the stakes -> the thing -> why it matters -> button (a
   memorable close / mic-drop). Keep momentum; every line earns the next.
-- ~30-45s read aloud (~2.6 words/sec, ~80-115 words total). Single idea.
+- ~30-45s TOTAL. Narration reads ~2.3 words/sec. CRITICAL: a speaks:true soundbite
+  eats 8-14s of runtime with ZERO narrator words — so BUDGET FOR IT. With one ~12s
+  soundbite, keep narrated words to ~65-80 total (not 115); without soundbites,
+  ~80-100. Overwriting blows past 45s — be lean, cut every non-essential word.
 - Concrete and punchy. No "in this video", no filler, no hedging padding.
 - Any shot that states a fact carries a "source" pointer (the source label). Use
   null for pure framing/opinion lines.

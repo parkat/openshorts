@@ -225,12 +225,13 @@ export const MotionTextScene: React.FC<SceneProps> = ({ scene, theme }) => {
   );
 };
 
-/** Source figure / page screenshot, matted on the cream field with Ken Burns +
- * jump-cuts between stills. Falls back to a title card if no image was generated. */
+/** Source figure — stock video or generated stills, matted on the cream field
+ * (Ken Burns + jump-cuts for stills). Falls back to a title card with no media. */
 export const FigureScene: React.FC<SceneProps> = ({ scene, theme }) => {
   const e = useEntrance();
   const images = sceneImages(scene);
-  if (!images.length) return <SlideScene scene={scene} theme={theme} />;
+  if (!scene.videoUrl && !images.length)
+    return <SlideScene scene={scene} theme={theme} />;
   return (
     <AbsoluteFill
       style={{
@@ -249,10 +250,18 @@ export const FigureScene: React.FC<SceneProps> = ({ scene, theme }) => {
           border: `10px solid ${theme.ink}`,
           transform: `scale(${interpolate(e, [0, 1], [0.94, 1])})`,
           opacity: e,
-          backgroundColor: "#fff",
+          backgroundColor: "#000",
         }}
       >
-        <ImageBeats images={images} theme={theme} />
+        {scene.videoUrl ? (
+          <OffthreadVideo
+            src={scene.videoUrl}
+            muted
+            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          />
+        ) : (
+          <ImageBeats images={images} theme={theme} />
+        )}
       </div>
     </AbsoluteFill>
   );

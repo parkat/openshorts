@@ -33,12 +33,14 @@ def narration_text(script):
     )
 
 
-def narrate(script, out_path, voice=DEFAULT_VOICE, model=None, key=None, tone=None):
+def narrate(script, out_path, voice=DEFAULT_VOICE, model=None, key=None, tone=None, speed=1.0):
     """Render the narration WAV for a shot-list script. Returns (path, seconds)."""
     text = narration_text(script)
     if not text:
         raise ValueError("script has no narration lines")
     pcm = orc.tts(styled(text, tone), voice=voice, model=model, response_format="pcm", key=key)
+    from explainer.assets.audio import trim_silence, atempo  # lazy: avoid import cycle
+    pcm = atempo(trim_silence(pcm), speed)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with wave.open(out_path, "wb") as w:
         w.setnchannels(1)
