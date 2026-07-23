@@ -207,7 +207,7 @@ export const AccentClipScene: React.FC<SceneProps> = ({ scene, theme }) => {
           style={{
             position: "absolute",
             left: 28,
-            bottom: 220,
+            top: 36,
             padding: "8px 16px",
             borderRadius: 8,
             backgroundColor: "rgba(46,42,38,0.72)",

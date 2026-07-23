@@ -94,7 +94,9 @@ def build_scene_list(alignment, assets=None):
                     scene["attribution"] = a.get("attribution") or (
                         f"via {src}" if src and src != "general" else ""
                     )
-                    scene["duckAudio"] = True
+                    # Soundbite shots let the clip's own audio play (Hinton speaks);
+                    # plain b-roll accents stay ducked/muted under the narration.
+                    scene["duckAudio"] = not shot.get("speaks")
             else:
                 # No asset yet — show the point as a title card instead.
                 scene["type"] = "slide"
@@ -120,6 +122,15 @@ def shot_assets_from_clips(shots, fetched_clips, job_id):
                 entry["attribution"] = f"via {c['channel']}"
             out[i] = entry
     return out
+
+
+def accent_display_fraction(scenes):
+    """Fraction of runtime that actually SHOWS accent-clip footage (displayed, not
+    fetched). This is the honest narration-dominance signal (§5) — a 14s clip that
+    only fills a 4s slot counts as 4s."""
+    total = max(1, sum(s["endMs"] - s["startMs"] for s in scenes))
+    accent = sum(s["endMs"] - s["startMs"] for s in scenes if s["type"] == "accent_clip")
+    return accent / total
 
 
 def build_props(alignment, narration_url, music_url=None, assets=None,

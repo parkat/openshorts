@@ -41,12 +41,9 @@ def check_guardrails(clips, narration_seconds):
             flags.append({"level": "block", "code": "clip_exceeds_narration", "clip_index": idx,
                           "message": f"clip {idx} ({dur:.0f}s) is longer than the narration ({narration_seconds:.0f}s)."})
 
-    if narration_seconds:
-        frac = total_clip / narration_seconds
-        if frac > (1.0 - NARRATION_DOMINANT):
-            flags.append({"level": "warn", "code": "not_narration_dominant", "clip_index": None,
-                          "message": f"accent clips cover {frac*100:.0f}% of runtime — keep original narration/visuals ≥{NARRATION_DOMINANT*100:.0f}%."})
-
+    # Narration-dominance (§5) is judged at render from DISPLAYED durations
+    # (render.accent_display_fraction), not fetched window length — a fetched 14s
+    # clip that only fills a 4s slot shouldn't trip the dominance warn here.
     order = {"block": 0, "warn": 1}
     return sorted(flags, key=lambda f: order.get(f["level"], 9))
 

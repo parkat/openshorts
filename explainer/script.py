@@ -25,15 +25,22 @@ Shorts channel. Write a 30-45 second vertical Short in a HYPE HOT-TAKE voice:
   a punchy 2-5 word distillation of the line. NOT a stage direction, NOT quotes,
   NOT "text:"/"split screen:" prefixes. e.g. narration "bigger models are hitting a
   wall" -> on_screen "SIZE HIT A WALL". Use null for figure/accent_clip/broll shots.
+- SOUNDBITES: when a source is an interview/talk/podcast, make 1-3 accent_clip shots
+  a "speaks":true soundbite — the person's OWN words carry that beat, so its
+  "narration" MUST be "" (the narrator does NOT talk over it). Structure the piece so
+  the narrator sets up in one shot, then a speaks:true accent_clip lands the punch in
+  the subject's voice, then the narrator bridges to the next. A speaks:true shot
+  should run ~8-14s. Other accent_clip shots (speaks:false) are silent b-roll the
+  narrator talks over. If there are no talking-head sources, use no soundbites.
 
 Return ONLY valid JSON (no markdown, no prose) matching exactly:
 {
   "title": "<punchy YouTube title, <=70 chars>",
   "hook": "<the opening spoken line>",
   "shots": [
-    {"role":"hook|setup|thing|why|button","narration":"<spoken line>",
+    {"role":"hook|setup|thing|why|button","narration":"<spoken line, or \\"\\" if speaks:true>",
      "visual":"slide|motion_text|figure|accent_clip|broll","visual_note":"<direction>",
-     "on_screen":"<2-5 word on-screen headline, or null>",
+     "on_screen":"<2-5 word on-screen headline, or null>","speaks":<true|false>,
      "source":"<source label or null>","seconds":<int>}
   ],
   "estimated_seconds": <int>,

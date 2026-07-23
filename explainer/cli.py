@@ -119,7 +119,7 @@ def cmd_assets(args):
     provenance), and a ducked CC0 music bed. Writes an assets.json manifest that
     `render` consumes. Skips clips (--no-clips) or music (--no-music) on request."""
     store.init_db()
-    from explainer.assets import tts
+    from explainer.assets import tts, audio
     from explainer import render as rnd
     proj_dir = _proj_dir(args.project_id)
     with store.session() as s:
@@ -128,43 +128,59 @@ def cmd_assets(args):
             print(f"no draft for project #{args.project_id}")
             return
         script = draft.script or {}
+        shots = script.get("shots", [])
         topic = s.get(store.Topic, s.get(store.Project, args.project_id).topic_id)
         sources = (topic.sources if topic else None) or []
         voice = args.voice or draft.voice_id or None
 
-        # 1) Narration
-        narration_path = os.path.join(proj_dir, "narration.wav")
-        print(f"narrating project #{args.project_id} (voice={voice or 'brand default'}) …", flush=True)
-        _, secs = tts.narrate(script, narration_path, **({"voice": voice} if voice else {}))
-        print(f"  narration → {secs:.1f}s")
+        manifest = {"music": None, "shot_assets": {}, "clip_flags": [], "narration_seconds": 0}
 
-        manifest = {"music": None, "shot_assets": {}, "clip_flags": [], "narration_seconds": secs}
-
-        # 2) Accent clips + fair-use guardrails + provenance. Prefer a clip-finder
-        #    plan (transcript-selected windows tied to shots); else fall back to the
-        #    topic's manual in/out timestamps.
+        # 1) Accent clips FIRST (soundbite narration needs the clip durations).
+        #    Prefer a clip-finder plan (transcript-selected windows tied to shots);
+        #    else fall back to the topic's manual in/out timestamps.
+        sa = {}
         if not args.no_clips:
             from explainer.assets import clips as clp
             plan_path = os.path.join(proj_dir, "clips_plan.json")
-            sa = {}
             if os.path.isfile(plan_path):
                 with open(plan_path, encoding="utf-8") as pf:
                     sels = (json.load(pf) or {}).get("selections", [])
                 if sels:
                     print(f"fetching {len(sels)} clip-finder window(s) …", flush=True)
-                    res = clp.gather_from_plan(s, args.project_id, sels, proj_dir, narration_seconds=secs)
+                    res = clp.gather_from_plan(s, args.project_id, sels, proj_dir)
                     sa = res["shot_assets"]
                     manifest["clip_flags"] = res["flags"]
             elif any(x.get("type") == "youtube" for x in sources):
                 print("fetching accent clips (manual timestamps) …", flush=True)
-                res = clp.gather_accent_clips(s, args.project_id, sources, proj_dir, narration_seconds=secs)
+                res = clp.gather_accent_clips(s, args.project_id, sources, proj_dir)
                 manifest["clip_flags"] = res["flags"]
                 job_id = rnd.job_id_for(args.project_id)
-                sa = rnd.shot_assets_from_clips(script.get("shots", []), res["clips"], job_id)
+                sa = rnd.shot_assets_from_clips(shots, res["clips"], job_id)
             manifest["shot_assets"] = {str(k): v for k, v in sa.items()}
             for f in manifest["clip_flags"]:
                 mark = "⛔" if f["level"] == "block" else "⚠️"
                 print(f"  {mark} {f['code']}: {f['message']}")
+
+        # 2) Narration. Soundbite shorts assemble a mixed timeline (Orus + silence
+        #    gaps where the clip speaks); otherwise a single continuous TTS read.
+        narration_path = os.path.join(proj_dir, "narration.wav")
+        soundbite_paths = {
+            i: os.path.join(proj_dir, os.path.basename(sa[str(i)]["videoUrl"]))
+            for i, shot in enumerate(shots)
+            if shot.get("speaks") and str(i) in sa
+        }
+        print(f"narrating project #{args.project_id} (voice={voice or 'brand default'}) …", flush=True)
+        if soundbite_paths and audio.has_soundbites(shots):
+            _, timeline = audio.assemble(shots, soundbite_paths, narration_path,
+                                         **({"voice": voice} if voice else {}))
+            with open(os.path.join(proj_dir, "timeline.json"), "w", encoding="utf-8") as tf:
+                json.dump(timeline, tf, ensure_ascii=False, indent=2)
+            secs = (timeline[-1]["end_ms"] / 1000.0) if timeline else 0.0
+            print(f"  assembled narration + {len(soundbite_paths)} soundbite(s) → {secs:.1f}s")
+        else:
+            _, secs = tts.narrate(script, narration_path, **({"voice": voice} if voice else {}))
+            print(f"  narration → {secs:.1f}s")
+        manifest["narration_seconds"] = secs
 
         # 3) Ducked CC0 music bed
         if not args.no_music:
@@ -197,12 +213,18 @@ def cmd_align(args):
         if not draft:
             print(f"no draft for project #{args.project_id}")
             return
-        audio = os.path.join(_proj_dir(args.project_id), "narration.wav")
+        proj_dir = _proj_dir(args.project_id)
+        audio = os.path.join(proj_dir, "narration.wav")
         if not os.path.isfile(audio):
             print(f"no narration at {audio} — run `assets` first")
             return
-        print(f"aligning project #{args.project_id} …", flush=True)
-        alignment = al.align(audio, draft.script or {})
+        timeline = None
+        tpath = os.path.join(proj_dir, "timeline.json")
+        if os.path.isfile(tpath):
+            with open(tpath, encoding="utf-8") as tf:
+                timeline = json.load(tf)
+        print(f"aligning project #{args.project_id}{' (soundbite timeline)' if timeline else ''} …", flush=True)
+        alignment = al.align(audio, draft.script or {}, timeline=timeline)
         out = os.path.join(_proj_dir(args.project_id), "align.json")
         al.write_alignment(alignment, out)
         print(f"aligned {len(alignment['words'])} words, {len(alignment['shots'])} shots "
@@ -302,6 +324,11 @@ def cmd_render(args):
             print(f"   {f['code']}: {f['message']}")
         return
     narration_url = _proj_url(args.project_id, "narration.wav")
+    # Honest narration-dominance signal (§5), from displayed (not fetched) durations.
+    scenes = rnd.build_scene_list(alignment, shot_assets)
+    frac = rnd.accent_display_fraction(scenes)
+    if frac > 0.4:
+        print(f"⚠️ accent footage is {frac*100:.0f}% of runtime — keep original ≥60% (§5).")
     with store.session() as s:
         s.get(store.Project, args.project_id).status = "render"
         s.commit()

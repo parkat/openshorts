@@ -145,11 +145,33 @@ def _proportional_fallback(shots, duration_ms):
     return out
 
 
-def align(audio_path, script):
+def _shots_from_timeline(shots, timeline, duration_ms):
+    """Use the assembly timeline's exact boundaries; a shot missing from the
+    timeline (produced no audio) collapses to a zero-length slot at the cursor."""
+    by_idx = {t["shot_index"]: t for t in timeline}
+    out, cursor = [], 0
+    for i, shot in enumerate(shots):
+        t = by_idx.get(i)
+        s = dict(shot)
+        s["index"] = i
+        if t:
+            s["startMs"], s["endMs"] = int(t["start_ms"]), int(t["end_ms"])
+            cursor = s["endMs"]
+        else:
+            s["startMs"] = s["endMs"] = cursor
+        out.append(s)
+    if out:
+        out[-1]["endMs"] = max(out[-1]["endMs"], duration_ms)
+    return out
+
+
+def align(audio_path, script, timeline=None):
     """Transcribe the narration and map it onto the script's shots.
 
     Returns {"duration_ms", "words", "shots"} — ready for `render.py` to turn into
-    a Remotion scene list. Pure with respect to the store; the CLI persists it.
+    a Remotion scene list. When an assembly `timeline` is given (mixed narrator +
+    soundbite audio), shot boundaries come from it (authoritative) and whisper is
+    used only for caption words; otherwise shots are aligned from the narration text.
     """
     shots = script.get("shots") or []
     if not shots:
@@ -159,12 +181,15 @@ def align(audio_path, script):
     words = _flatten_words(transcript)
     duration_ms = _audio_duration_ms(audio_path, words)
 
-    ref = _reference_tokens(shots)
-    if words and ref:
-        assignments = _assign_shots(words, ref)
-        aligned = _shot_boundaries(shots, words, assignments, duration_ms)
+    if timeline:
+        aligned = _shots_from_timeline(shots, timeline, duration_ms)
     else:
-        aligned = _proportional_fallback(shots, duration_ms)
+        ref = _reference_tokens(shots)
+        if words and ref:
+            assignments = _assign_shots(words, ref)
+            aligned = _shot_boundaries(shots, words, assignments, duration_ms)
+        else:
+            aligned = _proportional_fallback(shots, duration_ms)
 
     return {"duration_ms": duration_ms, "words": words, "shots": aligned}
 
