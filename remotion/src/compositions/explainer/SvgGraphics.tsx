@@ -210,10 +210,141 @@ const BarsGraphic: React.FC<Props> = ({ theme }) => {
   );
 };
 
+const ChipGraphic: React.FC<Props> = ({ theme, scene }) => {
+  const frame = useCurrentFrame();
+  const accent = accentOf(theme, scene.role);
+  const glow = 0.4 + 0.6 * Math.abs(Math.sin(frame / 14));
+  const pins = [0, 1, 2, 3, 4];
+  return (
+    <svg viewBox="0 0 900 900" width="62%" height="62%">
+      {pins.map((i) => {
+        const p = 250 + i * 90;
+        return (
+          <g key={i} fill={theme.ink}>
+            <rect x={p} y={150} width={38} height={64} />
+            <rect x={p} y={686} width={38} height={64} />
+            <rect x={150} y={p} width={64} height={38} />
+            <rect x={686} y={p} width={64} height={38} />
+          </g>
+        );
+      })}
+      <rect x={210} y={210} width={480} height={480} rx={28} fill={theme.bg} stroke={theme.ink} strokeWidth={16} />
+      <rect
+        x={330}
+        y={330}
+        width={240}
+        height={240}
+        rx={16}
+        fill={accent}
+        stroke={theme.ink}
+        strokeWidth={12}
+        style={{ filter: `drop-shadow(0 0 ${22 * glow}px ${accent})` }}
+      />
+      <text x={450} y={480} fill={theme.bg} fontSize={110} fontWeight={900} textAnchor="middle" fontFamily="Arial Black">AI</text>
+    </svg>
+  );
+};
+
+const RobotGraphic: React.FC<Props> = ({ theme, scene }) => {
+  const frame = useCurrentFrame();
+  const accent = accentOf(theme, scene.role);
+  const blink = frame % 90 < 6 ? 0.08 : 1;
+  return (
+    <svg viewBox="0 0 900 900" width="58%" height="58%">
+      <line x1={450} y1={190} x2={450} y2={120} stroke={theme.ink} strokeWidth={12} />
+      <circle cx={450} cy={104} r={26} fill={accent} style={{ filter: `drop-shadow(0 0 ${10 + 6 * Math.sin(frame / 8)}px ${accent})` }} />
+      <rect x={200} y={330} width={32} height={150} rx={12} fill={theme.ink} />
+      <rect x={668} y={330} width={32} height={150} rx={12} fill={theme.ink} />
+      <rect x={240} y={210} width={420} height={400} rx={54} fill={theme.bg} stroke={theme.ink} strokeWidth={18} />
+      <ellipse cx={360} cy={370} rx={54} ry={54 * blink} fill={accent} stroke={theme.ink} strokeWidth={8} />
+      <ellipse cx={540} cy={370} rx={54} ry={54 * blink} fill={accent} stroke={theme.ink} strokeWidth={8} />
+      <rect x={340} y={490} width={220} height={38} rx={19} fill={theme.ink} />
+    </svg>
+  );
+};
+
+const GlobeGraphic: React.FC<Props> = ({ theme, scene }) => {
+  const frame = useCurrentFrame();
+  const accent = accentOf(theme, scene.role);
+  return (
+    <svg viewBox="0 0 900 900" width="64%" height="64%">
+      <circle cx={450} cy={450} r={230} fill={accent} stroke={theme.ink} strokeWidth={16} />
+      <ellipse cx={450} cy={450} rx={90} ry={230} fill="none" stroke={theme.bg} strokeWidth={6} opacity={0.75} />
+      <ellipse cx={450} cy={450} rx={175} ry={230} fill="none" stroke={theme.bg} strokeWidth={6} opacity={0.6} />
+      <ellipse cx={450} cy={450} rx={230} ry={80} fill="none" stroke={theme.bg} strokeWidth={6} opacity={0.75} />
+      <line x1={220} y1={450} x2={680} y2={450} stroke={theme.bg} strokeWidth={6} opacity={0.6} />
+      <g transform={`rotate(${frame * 1.6} 450 450)`}>
+        <ellipse cx={450} cy={450} rx={320} ry={132} fill="none" stroke={theme.ink} strokeWidth={5} strokeDasharray="8 12" opacity={0.5} />
+        <circle cx={770} cy={450} r={20} fill={theme.rainbow[3]} stroke={theme.ink} strokeWidth={6} />
+      </g>
+    </svg>
+  );
+};
+
+const LockGraphic: React.FC<Props> = ({ theme, scene }) => {
+  const frame = useCurrentFrame();
+  const accent = accentOf(theme, scene.role);
+  const e = useSpringIn();
+  const glow = 0.4 + 0.4 * Math.sin(frame / 12);
+  return (
+    <svg viewBox="0 0 900 900" width="56%" height="56%" style={{ opacity: e }}>
+      <path d="M330 410 v-70 a120 120 0 0 1 240 0 v70" fill="none" stroke={theme.ink} strokeWidth={40} strokeLinecap="round" />
+      <rect
+        x={270}
+        y={405}
+        width={360}
+        height={320}
+        rx={40}
+        fill={accent}
+        stroke={theme.ink}
+        strokeWidth={18}
+        style={{ filter: `drop-shadow(0 0 ${16 * glow}px ${accent})` }}
+      />
+      <circle cx={450} cy={520} r={44} fill={theme.ink} />
+      <rect x={430} y={520} width={40} height={110} rx={16} fill={theme.ink} />
+    </svg>
+  );
+};
+
+const ClockGraphic: React.FC<Props> = ({ theme, scene }) => {
+  const frame = useCurrentFrame();
+  const accent = accentOf(theme, scene.role);
+  const rad = (deg: number) => (deg * Math.PI) / 180;
+  const hour = frame * 0.9;
+  const sec = frame * 7;
+  return (
+    <svg viewBox="0 0 900 900" width="62%" height="62%">
+      <circle cx={450} cy={450} r={258} fill={theme.bg} stroke={theme.ink} strokeWidth={20} />
+      {Array.from({ length: 12 }).map((_, i) => {
+        const a = rad(i * 30);
+        return (
+          <line
+            key={i}
+            x1={450 + 218 * Math.sin(a)}
+            y1={450 - 218 * Math.cos(a)}
+            x2={450 + 246 * Math.sin(a)}
+            y2={450 - 246 * Math.cos(a)}
+            stroke={theme.ink}
+            strokeWidth={10}
+          />
+        );
+      })}
+      <line x1={450} y1={450} x2={450 + 120 * Math.sin(rad(hour))} y2={450 - 120 * Math.cos(rad(hour))} stroke={theme.ink} strokeWidth={20} strokeLinecap="round" />
+      <line x1={450} y1={450} x2={450 + 200 * Math.sin(rad(sec))} y2={450 - 200 * Math.cos(rad(sec))} stroke={accent} strokeWidth={10} strokeLinecap="round" />
+      <circle cx={450} cy={450} r={24} fill={accent} stroke={theme.ink} strokeWidth={8} />
+    </svg>
+  );
+};
+
 const BUILTINS: Record<string, React.FC<Props>> = {
   network: NetworkGraphic,
   warning: WarningGraphic,
   bars: BarsGraphic,
+  chip: ChipGraphic,
+  robot: RobotGraphic,
+  globe: GlobeGraphic,
+  lock: LockGraphic,
+  clock: ClockGraphic,
 };
 
 export function hasSvg(scene: ExplainerScene): boolean {

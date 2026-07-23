@@ -19,42 +19,117 @@ import shutil
 SVG_DIR = os.environ.get("EXPLAINER_SVG_DIR", os.path.join("assets", "svg"))
 _TEXT_SHOTS = {"slide", "motion_text"}
 
-# Built-in animated graphics -> the keywords that select them.
-BUILTIN_KEYWORDS = {
-    "network": ["network", "neural", "ai", "model", "node", "connect", "brain", "learn", "intelligence"],
-    "warning": ["warning", "danger", "risk", "threat", "alarm", "alert", "fear", "scary", "wipe", "extinction", "control"],
-    "bars": ["chart", "graph", "growth", "increase", "percent", "stat", "rise", "data", "number", "odds", "scale"],
+# Canonical concept -> the many words (synonyms) that should select it. Shared by
+# the built-in graphics AND user files (a user's warning.svg matches "danger",
+# "threat", "extinction", ... not just the literal filename). Add synonyms freely;
+# good labeling here is what makes the SVG library actually get used.
+CONCEPTS = {
+    "network": ["network", "neural", "node", "connect", "connection", "model", "learn",
+                "learning", "intelligence", "deep", "layer", "algorithm", "system"],
+    "warning": ["warning", "danger", "dangerous", "risk", "threat", "alarm", "alert",
+                "fear", "scary", "wipe", "extinction", "extinct", "catastrophe", "doom",
+                "apocalypse", "existential", "kill", "destroy", "harm", "unsafe"],
+    "bars": ["chart", "graph", "growth", "grow", "increase", "percent", "percentage",
+             "stat", "statistic", "rise", "rising", "data", "number", "odds", "trend",
+             "metric", "measure", "double", "billion", "trillion"],
+    "chip": ["chip", "cpu", "gpu", "processor", "silicon", "hardware", "circuit",
+             "compute", "transistor", "semiconductor", "board", "microchip"],
+    "robot": ["robot", "machine", "android", "automation", "automated", "bot",
+              "humanoid", "mechanical", "cyborg"],
+    "globe": ["globe", "world", "earth", "global", "planet", "worldwide", "humanity",
+              "nations", "countries", "international", "society", "civilization"],
+    "lock": ["lock", "security", "secure", "safety", "safe", "encryption", "encrypt",
+             "protect", "protection", "privacy", "guard", "shield", "defense"],
+    "clock": ["clock", "time", "timer", "urgent", "urgency", "soon", "deadline",
+              "countdown", "fast", "speed", "quick", "hurry", "moment", "future", "now"],
+    # Concepts WITHOUT a built-in graphic yet — still matchable if the user supplies
+    # a file named for them (e.g. brain.svg, server.svg).
+    "brain": ["brain", "mind", "cognition", "cognitive", "neuron", "consciousness",
+              "thought", "think", "thinking", "human", "smart", "genius"],
+    "server": ["server", "servers", "datacenter", "cloud", "rack", "infrastructure",
+               "database", "storage", "farm"],
+    "eye": ["eye", "surveillance", "watch", "watching", "monitor", "spy", "spying",
+            "tracking", "track", "observe", "see", "vision", "camera"],
+    "money": ["money", "cost", "dollar", "invest", "investment", "profit", "economy",
+              "economic", "expensive", "fund", "funding", "wealth", "market", "cash"],
+    "rocket": ["rocket", "launch", "accelerate", "acceleration", "breakthrough",
+               "race", "advance", "advancement", "boom", "surge", "explode"],
+    "human": ["human", "humans", "people", "person", "worker", "job", "jobs",
+              "workforce", "society", "population", "everyone"],
+    "scale": ["scale", "balance", "ethics", "ethical", "fair", "fairness", "justice",
+              "weigh", "regulation", "regulate", "law", "policy", "govern", "government"],
 }
+# Concepts that have a built-in animated React graphic (must match SvgGraphics.tsx).
+BUILTIN = {"network", "warning", "bars", "chip", "robot", "globe", "lock", "clock"}
+_SYN2CONCEPT = {syn: c for c, syns in CONCEPTS.items() for syn in syns}
 _STOP = set("a an the of to in on and or for with is are it its this that then than "
             "he she they we you his her their our about into over".split())
 
 
-def _keywords(text):
-    return [w for w in re.findall(r"[a-z]{3,}", (text or "").lower()) if w not in _STOP]
-
-
-def library(svg_dir=None):
-    """{concept_keyword: filepath} for the user SVG folder (filename = concept)."""
-    d = svg_dir or SVG_DIR
-    out = {}
-    for f in sorted(glob.glob(os.path.join(d, "*.svg"))):
-        for kw in _keywords(os.path.splitext(os.path.basename(f))[0].replace("-", " ").replace("_", " ")):
-            out.setdefault(kw, f)
+def _stem(w):
+    """Light variants so plurals/gerunds hit singular synonyms (machines->machine)."""
+    out = {w}
+    if len(w) > 3 and w.endswith("s"):
+        out.add(w[:-1])
+    if len(w) > 6 and w.endswith("ing"):
+        out.add(w[:-3])
+    if len(w) > 5 and w.endswith("ed"):
+        out.add(w[:-2])
     return out
 
 
+def _keywords(text):
+    out = set()
+    for w in re.findall(r"[a-z]{3,}", (text or "").lower()):
+        if w not in _STOP:
+            out |= _stem(w)
+    return list(out)
+
+
+def _file_concept(path):
+    """Canonical concept a user file covers: map its filename to a known concept if
+    any filename word is a synonym, else the literal filename word."""
+    words = _keywords(os.path.splitext(os.path.basename(path))[0].replace("-", " ").replace("_", " "))
+    for w in words:
+        if w in _SYN2CONCEPT:
+            return _SYN2CONCEPT[w]
+    return words[0] if words else None
+
+
+def library(svg_dir=None):
+    """{concept: filepath} for the user SVG folder, concepts canonicalized."""
+    out = {}
+    for f in sorted(glob.glob(os.path.join(svg_dir or SVG_DIR, "*.svg"))):
+        c = _file_concept(f)
+        if c:
+            out.setdefault(c, f)
+    return out
+
+
+def _synonyms(concept):
+    return CONCEPTS.get(concept, [concept])
+
+
 def match(shot, files=None):
-    """Choose an SVG for a shot: ('file', path) from the user folder, ('kind', key)
-    from the built-ins, or None. User files win over built-ins."""
+    """Best SVG for a shot: ('file', path) or ('kind', concept), or None. Scores
+    each available concept by how many of its synonyms appear in the visual_note;
+    user files beat built-ins on ties."""
     words = set(_keywords(shot.get("visual_note") or shot.get("narration") or ""))
     files = library() if files is None else files
-    for kw in words:
-        if kw in files:
-            return ("file", files[kw])
-    for kind, kws in BUILTIN_KEYWORDS.items():
-        if words.intersection(kws):
-            return ("kind", kind)
-    return None
+    # available concept -> (is_file, source_tuple)
+    avail = {c: (True, ("file", p)) for c, p in files.items()}
+    for c in BUILTIN:
+        avail.setdefault(c, (False, ("kind", c)))
+
+    best, best_key = None, (0, 0)
+    for concept, (is_file, source) in avail.items():
+        score = len(words.intersection(_synonyms(concept)))
+        if score == 0:
+            continue
+        key = (score, 1 if is_file else 0)   # prefer more hits, then user files
+        if key > best_key:
+            best, best_key = source, key
+    return best
 
 
 def gather_svgs(shots, out_dir, shot_assets):
