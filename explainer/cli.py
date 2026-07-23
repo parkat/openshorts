@@ -173,7 +173,7 @@ def cmd_assets(args):
         # 1b) B-roll for figure/broll shots. Default: REAL stock footage (Pixabay,
         #     commercial-safe, no AI-disclosure label). AI stills only with
         #     --ai-visuals. Either way, Ken Burns / jump-cuts apply in the render.
-        n_broll = sum(1 for sh in shots if sh.get("visual") in ("figure", "broll"))
+        n_broll = sum(1 for sh in shots if sh.get("visual") == "broll")
         if not args.no_visuals and n_broll:
             if args.ai_visuals:
                 from explainer.assets import visuals as vis

@@ -41,7 +41,8 @@ Shorts channel. Write a 30-45 second vertical Short in a HYPE HOT-TAKE voice:
 - "on_screen" is the ACTUAL big text to burn on screen for slide/motion_text shots:
   a punchy 2-5 word distillation of the line. NOT a stage direction, NOT quotes,
   NOT "text:"/"split screen:" prefixes. e.g. narration "bigger models are hitting a
-  wall" -> on_screen "SIZE HIT A WALL". Use null for figure/accent_clip/broll shots.
+  wall" -> on_screen "SIZE HIT A WALL". For a figure shot, on_screen is the EXACT
+  stat/label to show big (e.g. "20%", "GODFATHER OF AI"). Null for accent_clip/broll.
 - SOUNDBITES: when a source is an interview/talk/podcast, make 1-3 accent_clip shots
   a "speaks":true soundbite — the person's OWN words carry that beat, so its
   "narration" MUST be "" (the narrator does NOT talk over it). Structure the piece so

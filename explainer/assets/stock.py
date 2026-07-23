@@ -28,10 +28,12 @@ def keywords(shot, limit=4):
 
 
 def search(query, key, per_page=20):
-    # video_type=film -> real footage (not animation), which is the whole point of
-    # moving off AI visuals. safesearch on. q is URL-encoded by requests (<=100 chars).
+    # video_type=all: both real film AND stock motion-graphics/animation (both are
+    # human-made stock — NOT AI-generated, so no AI label — and the abstract ones
+    # actually illustrate tech concepts like "neural network"). q is URL-encoded by
+    # requests (<=100 chars). safesearch on.
     r = requests.get(API, params={"key": key, "q": query[:100], "per_page": per_page,
-                                  "video_type": "film", "safesearch": "true"}, timeout=30)
+                                  "safesearch": "true"}, timeout=30)
     r.raise_for_status()
     return r.json().get("hits", [])
 
@@ -80,7 +82,9 @@ def gather_stock(shots, out_dir, shot_assets, key):
     merged = {int(k): dict(v) for k, v in (shot_assets or {}).items()}
     got = 0
     for i, shot in enumerate(shots):
-        if shot.get("visual") not in ("figure", "broll"):
+        # Only broll wants stock footage; figure = an on-screen stat/label (text),
+        # accent_clip = reference footage. Stock for a stat -> irrelevant clips.
+        if shot.get("visual") != "broll":
             continue
         if merged.get(i, {}).get("videoUrl") or merged.get(i, {}).get("images"):
             continue
