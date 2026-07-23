@@ -91,6 +91,23 @@ def build_scene_list(alignment, assets=None):
     return scenes
 
 
+def shot_assets_from_clips(shots, fetched_clips, job_id):
+    """Pair fetched accent clips (in order) with the shots whose visual is
+    'accent_clip'. Returns {shot_index: {videoUrl, [attribution]}} for render's
+    `assets`. Clips that failed to fetch (no local_path) are skipped."""
+    ready = [c for c in (fetched_clips or []) if c.get("local_path")]
+    out, k = {}, 0
+    for i, shot in enumerate(shots):
+        if shot.get("visual") == "accent_clip" and k < len(ready):
+            c = ready[k]
+            k += 1
+            entry = {"videoUrl": f"/output/{job_id}/{os.path.basename(c['local_path'])}"}
+            if c.get("channel"):
+                entry["attribution"] = f"via {c['channel']}"
+            out[i] = entry
+    return out
+
+
 def build_props(alignment, narration_url, music_url=None, assets=None,
                 theme=None, fps=FPS, width=WIDTH, height=HEIGHT):
     """Assemble the ExplainerShort inputProps."""

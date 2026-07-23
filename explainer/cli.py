@@ -115,22 +115,64 @@ def cmd_script(args):
 
 
 def cmd_assets(args):
-    """Narration TTS for the project's latest draft -> narration.wav on disk."""
+    """Build the project's assets: narration TTS, accent clips (guardrails +
+    provenance), and a ducked CC0 music bed. Writes an assets.json manifest that
+    `render` consumes. Skips clips (--no-clips) or music (--no-music) on request."""
     store.init_db()
     from explainer.assets import tts
+    from explainer import render as rnd
+    proj_dir = _proj_dir(args.project_id)
     with store.session() as s:
         draft = _latest_draft(s, args.project_id)
         if not draft:
             print(f"no draft for project #{args.project_id}")
             return
         script = draft.script or {}
+        topic = s.get(store.Topic, s.get(store.Project, args.project_id).topic_id)
+        sources = (topic.sources if topic else None) or []
         voice = args.voice or draft.voice_id or None
-        out = os.path.join(_proj_dir(args.project_id), "narration.wav")
+
+        # 1) Narration
+        narration_path = os.path.join(proj_dir, "narration.wav")
         print(f"narrating project #{args.project_id} (voice={voice or 'brand default'}) …", flush=True)
-        path, secs = tts.narrate(script, out, **({"voice": voice} if voice else {}))
+        _, secs = tts.narrate(script, narration_path, **({"voice": voice} if voice else {}))
+        print(f"  narration → {secs:.1f}s")
+
+        manifest = {"music": None, "shot_assets": {}, "clip_flags": [], "narration_seconds": secs}
+
+        # 2) Accent clips + fair-use guardrails + provenance
+        if not args.no_clips and any(x.get("type") == "youtube" for x in sources):
+            from explainer.assets import clips as clp
+            print("fetching accent clips …", flush=True)
+            res = clp.gather_accent_clips(s, args.project_id, sources, proj_dir, narration_seconds=secs)
+            manifest["clip_flags"] = res["flags"]
+            job_id = rnd.job_id_for(args.project_id)
+            sa = rnd.shot_assets_from_clips(script.get("shots", []), res["clips"], job_id)
+            manifest["shot_assets"] = {str(k): v for k, v in sa.items()}
+            for f in res["flags"]:
+                mark = "⛔" if f["level"] == "block" else "⚠️"
+                print(f"  {mark} {f['code']}: {f['message']}")
+
+        # 3) Ducked CC0 music bed
+        if not args.no_music:
+            from explainer.assets import music as mus
+            bed = os.path.join(proj_dir, "music.wav")
+            try:
+                if mus.build_bed(args.project_id, narration_path, bed):
+                    manifest["music"] = _proj_url(args.project_id, "music.wav")
+                    print(f"  music bed → {os.path.basename(bed)} (ducked)")
+                else:
+                    print("  (no CC0 tracks in library — skipping music)")
+            except Exception as e:  # noqa: BLE001 — music is optional, never block assets
+                print(f"  ⚠️ music duck failed (skipping): {e}")
+
+        with open(os.path.join(proj_dir, "assets.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
         s.get(store.Project, args.project_id).status = "assets"
         s.commit()
-        print(f"narration → {path}  ({secs:.1f}s)")
+    blocks = [f for f in manifest["clip_flags"] if f["level"] == "block"]
+    print(f"assets ready → {proj_dir}/assets.json"
+          + (f"  ({len(blocks)} block flag(s) to resolve in gate 1)" if blocks else ""))
 
 
 def cmd_align(args):
@@ -154,22 +196,71 @@ def cmd_align(args):
               f"({alignment['duration_ms']/1000:.1f}s) → {out}")
 
 
+def cmd_factcheck(args):
+    """Extract atomic claims from the latest draft and label them against sources;
+    store the flags on the draft for gate 1."""
+    store.init_db()
+    from explainer import factcheck as fc
+    source_text = ""
+    if args.source_file and os.path.isfile(args.source_file):
+        with open(args.source_file, encoding="utf-8") as f:
+            source_text = f.read()
+    with store.session() as s:
+        draft = _latest_draft(s, args.project_id)
+        if not draft:
+            print(f"no draft for project #{args.project_id}")
+            return
+        print(f"fact-checking project #{args.project_id} "
+              f"({'with sources' if source_text else 'general knowledge, strict'}) …", flush=True)
+        result = fc.factcheck(draft.script or {}, source_text, model=(args.model or None))
+        draft.factcheck = result
+        if any(c["label"] != "supported" for c in result["claims"]):
+            draft.status = "needs_review"
+        s.commit()
+        sm = result["summary"]
+        print(f"\nclaims: {sm['supported']} supported · {sm['overstated']} overstated · {sm['unsupported']} unsupported")
+        for c in fc.flags(result):
+            mark = "⛔" if c["label"] == "unsupported" else "⚠️"
+            print(f"  {mark} [{c['label']}] {c['claim']}")
+            if c.get("note"):
+                print(f"       ↳ {c['note']}")
+        if not fc.flags(result):
+            print("  ✓ no flags — all claims supported")
+
+
 def cmd_render(args):
     """Render the project (align.json + narration + assets) -> 9:16 MP4."""
     store.init_db()
     from explainer import render as rnd
-    align_path = os.path.join(_proj_dir(args.project_id), "align.json")
+    proj_dir = _proj_dir(args.project_id)
+    align_path = os.path.join(proj_dir, "align.json")
     if not os.path.isfile(align_path):
         print(f"no {align_path} — run `align` first")
         return
     with open(align_path, encoding="utf-8") as f:
         alignment = json.load(f)
+    # Optional asset manifest from `assets` (music bed + accent-clip shot map).
+    music_url, shot_assets, clip_flags = None, None, []
+    apath = os.path.join(proj_dir, "assets.json")
+    if os.path.isfile(apath):
+        with open(apath, encoding="utf-8") as f:
+            man = json.load(f)
+        music_url = man.get("music")
+        shot_assets = {int(k): v for k, v in (man.get("shot_assets") or {}).items()}
+        clip_flags = man.get("clip_flags") or []
+    blocks = [f for f in clip_flags if f.get("level") == "block"]
+    if blocks and not args.force:
+        print(f"⛔ {len(blocks)} unresolved guardrail block(s) — fix or re-run with --force:")
+        for f in blocks:
+            print(f"   {f['code']}: {f['message']}")
+        return
     narration_url = _proj_url(args.project_id, "narration.wav")
     with store.session() as s:
         s.get(store.Project, args.project_id).status = "render"
         s.commit()
     print(f"rendering project #{args.project_id} via {rnd.RENDER_SERVICE_URL} …", flush=True)
-    job = rnd.render(alignment, narration_url, args.project_id, poll=not args.no_wait,
+    job = rnd.render(alignment, narration_url, args.project_id, music_url=music_url,
+                     assets=shot_assets, poll=not args.no_wait,
                      service_url=(args.service_url or None))
     if args.no_wait:
         print(f"submitted render {job['renderId']} (job {job['job_id']})")
@@ -215,12 +306,6 @@ def cmd_schedule(args):
         print(f"  {ok} {r['service']}: {r.get('post_id') or r.get('error')}")
 
 
-def _stub(name):
-    def _f(args):
-        print(f"[{name}] not implemented yet — Phase 2 (see HANDOFF-explainer-pipeline.md).")
-    return _f
-
-
 def cmd_worker(args):
     """Background loop: tick the 1/day scheduler. (Optional radar lands in Phase 3.)"""
     store.init_db()
@@ -257,10 +342,18 @@ def main():
     sp.add_argument("--model", default="", help="override the OpenRouter model")
     sp.set_defaults(func=cmd_script)
 
-    ap = sub.add_parser("assets", help="narrate the draft (TTS) into narration.wav")
+    ap = sub.add_parser("assets", help="build assets: narration, accent clips, music bed")
     ap.add_argument("--project-id", type=int, required=True)
     ap.add_argument("--voice", default="", help="override the TTS voice")
+    ap.add_argument("--no-clips", action="store_true", help="skip accent-clip fetch")
+    ap.add_argument("--no-music", action="store_true", help="skip the music bed")
     ap.set_defaults(func=cmd_assets)
+
+    fp = sub.add_parser("factcheck", help="claim-check the draft against sources")
+    fp.add_argument("--project-id", type=int, required=True)
+    fp.add_argument("--source-file", default="", help="path to source text to verify against")
+    fp.add_argument("--model", default="", help="override the OpenRouter model")
+    fp.set_defaults(func=cmd_factcheck)
 
     lp = sub.add_parser("align", help="word-timestamp the narration -> align.json")
     lp.add_argument("--project-id", type=int, required=True)
@@ -269,6 +362,7 @@ def main():
     rp = sub.add_parser("render", help="render the explainer 9:16 MP4")
     rp.add_argument("--project-id", type=int, required=True)
     rp.add_argument("--no-wait", action="store_true", help="submit without polling")
+    rp.add_argument("--force", action="store_true", help="render despite guardrail block flags")
     rp.add_argument("--service-url", default="", help="override RENDER_SERVICE_URL")
     rp.set_defaults(func=cmd_render)
 
@@ -279,8 +373,6 @@ def main():
     cp = sub.add_parser("schedule", help="drip the next ready project (or --project-id)")
     cp.add_argument("--project-id", type=int, default=0, help="schedule a specific project")
     cp.set_defaults(func=cmd_schedule)
-
-    sub.add_parser("factcheck", help="factcheck (Phase 2)").set_defaults(func=_stub("factcheck"))
 
     sub.add_parser("worker", help="run the background worker loop").set_defaults(func=cmd_worker)
 
