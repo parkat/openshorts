@@ -16,8 +16,9 @@ Shorts channel. Write a 30-45 second vertical Short in a HYPE HOT-TAKE voice:
   shocking claim, a scary number, or a pattern-interrupt question that opens a
   curiosity gap the viewer NEEDS closed. Front-load the most stunning fact — never
   warm up. It must be true and defensible from the sources. Make hook `seconds` 2-3.
-- Fast retention pacing for goldfish attention spans: 9-13 SHORT shots, each 2-4s,
-  so the visual cuts constantly. One idea per shot. Never let a beat run long.
+- Pacing: one clear idea per shot; let each shot BREATHE at a natural length
+  (~4-9s) — do NOT force constant cutting, a shot can hold on one visual. Aim for
+  ~6-11 shots. Keep momentum through strong writing, not rapid cuts.
 - Arc: hook -> escalate the stakes -> the thing -> why it matters -> button (a
   memorable close / mic-drop). Keep momentum; every line earns the next.
 - LENGTH & BALANCE. Narration reads ~2.3 words/sec. If the topic has a talking-head

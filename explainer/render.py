@@ -113,9 +113,9 @@ def build_scene_list(alignment, assets=None):
                     scene["svgUrl"] = a["svgUrl"]
                 if a.get("svgKind"):
                     scene["svgKind"] = a["svgKind"]
-            # Speech-aligned, variable cut lengths for a montage (>1 clip/still).
-            if len(scene.get("videos") or []) > 1 or len(scene.get("images") or []) > 1:
-                scene["beats"] = _beats_for(scene["startMs"], scene["endMs"], words)
+            # No fast-cut beats: a multi-clip shot plays its clips SEQUENTIALLY at a
+            # natural pace (composition handles it) — visuals are no longer chopped
+            # into rapid 0.75-2.0s sub-cuts.
         else:
             # Text beat: an animated SVG graphic (user file or built-in), no text.
             # svgKind rides along even with svgUrl so the loaded SVG animates in a

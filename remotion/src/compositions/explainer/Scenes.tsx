@@ -13,9 +13,6 @@ import {
 import type { ExplainerScene, ExplainerTheme } from "../../lib/explainer-types";
 import { SvgScene, hasSvg } from "./SvgGraphics";
 
-// Short-form retention: hard-cut / punch to a new visual about this often.
-const BEAT_SEC = 1.0;
-
 interface SceneProps {
   scene: ExplainerScene;
   theme: ExplainerTheme;
@@ -33,47 +30,28 @@ function pickAccent(theme: ExplainerTheme, role?: string): string {
   return theme.rainbow[(i >= 0 ? i : 0) % theme.rainbow.length] ?? theme.rainbow[0];
 }
 
-// Hard-cut punch framings so a held clip keeps "cutting" every beat.
-const PUNCHES = [
-  { scale: 1.08, x: 0, y: 0 },
-  { scale: 1.24, x: -6, y: -4 },
-  { scale: 1.14, x: 6, y: 3 },
-  { scale: 1.32, x: 0, y: -6 },
-];
-function punchStyle(beat: number): React.CSSProperties {
-  const p = PUNCHES[beat % PUNCHES.length];
-  return { transform: `scale(${p.scale}) translate(${p.x}%, ${p.y}%)` };
-}
-
-/** Split the shot into beats and render each with a hard cut. Uses the explicit,
- * speech-aligned `beatsMs` (variable 0.75–2.0s cuts from render.py) when provided;
- * otherwise falls back to uniform ~BEAT_SEC beats. */
-const Beats: React.FC<{
-  beatsMs?: number[];
-  children: (beat: number, beatFrames: number) => React.ReactNode;
-}> = ({ beatsMs, children }) => {
-  const { durationInFrames, fps } = useVideoConfig();
-  let lengths: number[];
-  if (beatsMs && beatsMs.length) {
-    lengths = beatsMs.map((ms) => Math.max(1, Math.round((ms / 1000) * fps)));
-  } else {
-    const bf = Math.max(1, Math.round(BEAT_SEC * fps));
-    const n = Math.max(1, Math.round(durationInFrames / bf));
-    lengths = Array.from({ length: n }, () => Math.ceil(durationInFrames / n));
-  }
+/** Play N layers in order, each for an equal slice of the shot — natural pacing,
+ * one visual per beat, NO rapid sub-cutting. A single-layer shot just holds. */
+const Sequential: React.FC<{ count: number; render: (i: number) => React.ReactNode }> = ({
+  count,
+  render,
+}) => {
+  const { durationInFrames } = useVideoConfig();
+  const n = Math.max(1, count);
+  const each = Math.max(1, Math.ceil(durationInFrames / n));
   let from = 0;
   return (
-    <>
-      {lengths.map((len, b) => {
+    <AbsoluteFill style={{ backgroundColor: "#000" }}>
+      {Array.from({ length: n }).map((_, i) => {
         const el = (
-          <Sequence key={b} from={from} durationInFrames={len} layout="none">
-            {children(b, len)}
+          <Sequence key={i} from={from} durationInFrames={each} layout="none">
+            <AbsoluteFill>{render(i)}</AbsoluteFill>
           </Sequence>
         );
-        from += len;
+        from += each;
         return el;
       })}
-    </>
+    </AbsoluteFill>
   );
 };
 
@@ -134,9 +112,9 @@ const VideoClip: React.FC<{ src: string }> = ({ src }) => {
   );
 };
 
-/** Stock b-roll. One clip -> plays continuously (no awkward same-clip skipping);
- * multiple clips -> hard-cut between DISTINCT footage each beat (a real montage). */
-const StockVideo: React.FC<{ videos: string[]; beats?: number[] }> = ({ videos, beats }) => {
+/** Stock b-roll. One clip -> holds continuously. Multiple clips -> each plays in
+ * order for an equal slice of the shot (a calm montage, natural pace — no fast cuts). */
+const StockVideo: React.FC<{ videos: string[] }> = ({ videos }) => {
   if (videos.length <= 1) {
     return (
       <AbsoluteFill style={{ backgroundColor: "#000" }}>
@@ -144,56 +122,29 @@ const StockVideo: React.FC<{ videos: string[]; beats?: number[] }> = ({ videos, 
       </AbsoluteFill>
     );
   }
-  return (
-    <AbsoluteFill style={{ backgroundColor: "#000" }}>
-      <Beats beatsMs={beats}>
-        {(b) => (
-          <AbsoluteFill>
-            <VideoClip src={videos[b % videos.length]} />
-          </AbsoluteFill>
-        )}
-      </Beats>
-    </AbsoluteFill>
-  );
+  return <Sequential count={videos.length} render={(i) => <VideoClip src={videos[i]} />} />;
 };
 
-/** Generated explanatory AID clips. A spoken aid rides a ~15s soundbite as a
- * MONTAGE of staged clips — play them SEQUENTIALLY (each an equal slice) so the
- * concept progresses (beginning -> developing -> final), not a jittery beat-cycle.
- * All muted; the audio is the narrator or the speaker's baked soundbite. */
-const AidSequence: React.FC<{ videos: string[] }> = ({ videos }) => {
-  const { durationInFrames } = useVideoConfig();
-  const each = Math.max(1, Math.ceil(durationInFrames / videos.length));
-  let from = 0;
-  return (
-    <AbsoluteFill style={{ backgroundColor: "#000" }}>
-      {videos.map((src, i) => {
-        const el = (
-          <Sequence key={i} from={from} durationInFrames={each} layout="none">
-            <AbsoluteFill>
-              <VideoClip src={src} />
-            </AbsoluteFill>
-          </Sequence>
-        );
-        from += each;
-        return el;
-      })}
-    </AbsoluteFill>
-  );
-};
-
-/** Generated stills, jump-cut between them with Ken Burns + punch each beat. */
-const ImageScene: React.FC<{ images: string[]; beats?: number[] }> = ({ images, beats }) => (
-  <AbsoluteFill style={{ backgroundColor: "#000" }}>
-    <Beats beatsMs={beats}>
-      {(b) => (
-        <AbsoluteFill style={punchStyle(b)}>
-          <KenBurns src={images[b % images.length]} seed={b + 1} />
-        </AbsoluteFill>
-      )}
-    </Beats>
-  </AbsoluteFill>
+/** Generated explanatory AID clips — staged clips play in sequence (progression),
+ * each an equal slice; muted (audio is the narrator or the speaker's soundbite). */
+const AidSequence: React.FC<{ videos: string[] }> = ({ videos }) => (
+  <Sequential count={videos.length} render={(i) => <VideoClip src={videos[i]} />} />
 );
+
+/** Generated stills — hold with a gentle Ken Burns pan/zoom; multiple stills play
+ * in sequence (equal slices). No punch, no rapid cutting. */
+const ImageScene: React.FC<{ images: string[] }> = ({ images }) => {
+  if (images.length <= 1) {
+    return (
+      <AbsoluteFill style={{ backgroundColor: "#000" }}>
+        <KenBurns src={images[0]} seed={1} />
+      </AbsoluteFill>
+    );
+  }
+  return (
+    <Sequential count={images.length} render={(i) => <KenBurns src={images[i]} seed={i + 1} />} />
+  );
+};
 
 /** Animated brand backdrop for text beats — NO headline (the captions ARE the
  * words, so nothing competes with them). Continuous motion + a focal pulse, base
@@ -361,9 +312,9 @@ export const SceneRenderer: React.FC<SceneProps> = ({ scene, theme }) => {
     if (av.length) return <AidSequence videos={av} />;
   }
   const vids = sceneVideos(scene);
-  if (vids.length) return <StockVideo videos={vids} beats={scene.beats} />;
+  if (vids.length) return <StockVideo videos={vids} />;
   const imgs = sceneImages(scene);
-  if (imgs.length) return <ImageScene images={imgs} beats={scene.beats} />;
+  if (imgs.length) return <ImageScene images={imgs} />;
   // No on-screen headline/stat text anywhere — the yellow captions are the ONLY
   // text. A text/figure beat shows an animated SVG graphic if one was assigned,
   // else the animated brand backdrop.
