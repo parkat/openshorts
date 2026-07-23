@@ -34,9 +34,14 @@ BRAND = {
         "caption": "bold condensed sans",
     },
 
-    # Narration — chosen deep-male voice (2026-07-22). A/B baseline.
-    "voice": "Orus",
+    # Narration — Aoede voice + a spoken style directive (chosen 2026-07-22).
+    "voice": "Aoede",
     "tts_model": "google/gemini-3.1-flash-tts-preview",
+    # Gemini TTS style control is PROMPT-driven: `tone` is a full natural-language
+    # directive prepended as "<tone>: <text>" (the model styles delivery without
+    # speaking the directive). Verified to beat the OpenAI-style `instructions`
+    # field. Per-run override via `assets --tone`; per-shot via shot["tone"].
+    "tts_tone": "Read aloud quickly in a deep professional Narrators voice",
     # Subtle VHS treatment on the Remotion composite (kept tasteful, not gimmicky).
     "vhs": {"scanlines": True, "grain": "light", "chroma_wobble": "subtle"},
 

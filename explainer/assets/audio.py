@@ -19,6 +19,7 @@ import subprocess
 
 import openrouter_client as orc
 from explainer.brand import BRAND
+from explainer.assets.tts import styled
 
 SAMPLE_RATE = 24000
 SAMPLE_WIDTH = 2               # 16-bit
@@ -50,10 +51,11 @@ def _dur_ms(pcm):
 
 
 def assemble(shots, soundbite_paths, out_path, voice=DEFAULT_VOICE,
-             model=None, key=None, tts=None):
+             model=None, key=None, tts=None, tone=None):
     """Build the master narration WAV + timeline.
 
     `soundbite_paths`: {shot_index: local_clip_path} for the shots that speak.
+    `tone`: run-level Gemini style directive; a shot may override via shot["tone"].
     `tts`: injectable text->pcm fn for testing (defaults to OpenRouter TTS).
     Returns (out_path, timeline).
     """
@@ -71,7 +73,7 @@ def assemble(shots, soundbite_paths, out_path, voice=DEFAULT_VOICE,
             text = (shot.get("narration") or "").strip()
             if not text:
                 continue
-            pcm = tts(text)
+            pcm = tts(styled(text, shot.get("tone", tone)))
             kind = "narration"
         ms = _dur_ms(pcm)
         timeline.append({"shot_index": i, "start_ms": int(cursor),

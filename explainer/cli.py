@@ -132,6 +132,16 @@ def cmd_assets(args):
         topic = s.get(store.Topic, s.get(store.Project, args.project_id).topic_id)
         sources = (topic.sources if topic else None) or []
         voice = args.voice or draft.voice_id or None
+        # Tone: --tone overrides; default = brand tone; "none"/"off"/"" disables.
+        from explainer.brand import BRAND
+        if args.tone is None:
+            tone = BRAND.get("tts_tone")
+        elif args.tone.strip().lower() in ("", "none", "off", "neutral"):
+            tone = None
+        else:
+            tone = args.tone
+        if tone:
+            print(f"  tone: {tone}")
 
         manifest = {"music": None, "shot_assets": {}, "clip_flags": [], "narration_seconds": 0}
 
@@ -172,13 +182,14 @@ def cmd_assets(args):
         print(f"narrating project #{args.project_id} (voice={voice or 'brand default'}) …", flush=True)
         if soundbite_paths and audio.has_soundbites(shots):
             _, timeline = audio.assemble(shots, soundbite_paths, narration_path,
-                                         **({"voice": voice} if voice else {}))
+                                         tone=tone, **({"voice": voice} if voice else {}))
             with open(os.path.join(proj_dir, "timeline.json"), "w", encoding="utf-8") as tf:
                 json.dump(timeline, tf, ensure_ascii=False, indent=2)
             secs = (timeline[-1]["end_ms"] / 1000.0) if timeline else 0.0
             print(f"  assembled narration + {len(soundbite_paths)} soundbite(s) → {secs:.1f}s")
         else:
-            _, secs = tts.narrate(script, narration_path, **({"voice": voice} if voice else {}))
+            _, secs = tts.narrate(script, narration_path, tone=tone,
+                                  **({"voice": voice} if voice else {}))
             print(f"  narration → {secs:.1f}s")
         manifest["narration_seconds"] = secs
 
@@ -419,6 +430,8 @@ def main():
     ap = sub.add_parser("assets", help="build assets: narration, accent clips, music bed")
     ap.add_argument("--project-id", type=int, required=True)
     ap.add_argument("--voice", default="", help="override the TTS voice")
+    ap.add_argument("--tone", default=None,
+                    help="TTS delivery tone (default: brand; 'none' to disable)")
     ap.add_argument("--no-clips", action="store_true", help="skip accent-clip fetch")
     ap.add_argument("--no-music", action="store_true", help="skip the music bed")
     ap.set_defaults(func=cmd_assets)

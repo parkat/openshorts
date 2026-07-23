@@ -15,6 +15,15 @@ SAMPLE_WIDTH = 2               # 16-bit
 DEFAULT_VOICE = BRAND.get("voice", "Orus")
 
 
+def styled(text, tone=None):
+    """Apply a Gemini TTS style directive by prompt (not the `instructions` field,
+    which Gemini barely honors). `tone` is a full natural-language directive that's
+    prepended verbatim, e.g. "Read aloud quickly in a deep professional narrator's
+    voice"; the model styles delivery without speaking the directive aloud."""
+    tone = (tone or "").strip().rstrip(":").strip()
+    return f"{tone}: {text}" if tone else text
+
+
 def narration_text(script):
     """Join the shot narrations into one spoken script."""
     return " ".join(
@@ -24,12 +33,12 @@ def narration_text(script):
     )
 
 
-def narrate(script, out_path, voice=DEFAULT_VOICE, model=None, key=None):
+def narrate(script, out_path, voice=DEFAULT_VOICE, model=None, key=None, tone=None):
     """Render the narration WAV for a shot-list script. Returns (path, seconds)."""
     text = narration_text(script)
     if not text:
         raise ValueError("script has no narration lines")
-    pcm = orc.tts(text, voice=voice, model=model, response_format="pcm", key=key)
+    pcm = orc.tts(styled(text, tone), voice=voice, model=model, response_format="pcm", key=key)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with wave.open(out_path, "wb") as w:
         w.setnchannels(1)
