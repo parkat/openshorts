@@ -15,6 +15,11 @@ import argparse
 
 # Ensure the repo root (where store.py lives) is importable when run as a module.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    from dotenv import load_dotenv
+    load_dotenv()  # so the CLI has OPENROUTER/BUFFER when run via `docker exec`
+except Exception:
+    pass
 import store  # noqa: E402
 
 
@@ -57,6 +62,36 @@ def cmd_queue(args):
             print(f"#{p.id} [{p.status}] {p.title or '(untitled)'}  topic={p.topic_id}  updated={p.updated_at:%Y-%m-%d %H:%M}")
 
 
+def cmd_script(args):
+    store.init_db()
+    from explainer import script as scr
+    with store.session() as s:
+        topic = s.get(store.Topic, args.topic_id)
+        if not topic:
+            print(f"topic #{args.topic_id} not found")
+            return
+        print(f"drafting script for topic #{topic.id}: {topic.title} …", flush=True)
+        sl = scr.generate_script(topic.title, topic.summary, topic.sources or [],
+                                 model=(args.model or None))
+        proj = store.Project(topic_id=topic.id, title=sl.get("title") or topic.title, status="review")
+        s.add(proj)
+        s.flush()
+        draft = store.Draft(project_id=proj.id, script=sl, status="needs_review")
+        s.add(draft)
+        s.commit()
+        print(f"\n=== {sl.get('title')}  (~{sl.get('estimated_seconds')}s) ===")
+        for shot in sl.get("shots", []):
+            print(f"[{str(shot.get('role','?')):6}] {shot.get('seconds','?')}s  {shot.get('narration','')}")
+            print(f"         · {shot.get('visual','?')}: {shot.get('visual_note','')}  (src: {shot.get('source')})")
+        caps = sl.get("captions", {})
+        if caps:
+            print("\ncaptions:")
+            for k in ("youtube", "tiktok", "instagram"):
+                if caps.get(k):
+                    print(f"  {k}: {caps[k]}")
+        print(f"\nstored → project #{proj.id}, draft #{draft.id} (status: needs_review)")
+
+
 def _stub(name):
     def _f(args):
         print(f"[{name}] not implemented yet — Phase 1 (see HANDOFF-explainer-pipeline.md).")
@@ -86,7 +121,12 @@ def main():
     tp.add_argument("--sources", default="", help='JSON list, e.g. \'[{"type":"youtube","url":"..."}]\'')
     tp.set_defaults(func=cmd_topics)
 
-    for name in ["script", "factcheck", "assets", "render", "approve", "schedule"]:
+    sp = sub.add_parser("script", help="draft a shot-list script for a topic")
+    sp.add_argument("--topic-id", type=int, required=True)
+    sp.add_argument("--model", default="", help="override the OpenRouter model")
+    sp.set_defaults(func=cmd_script)
+
+    for name in ["factcheck", "assets", "render", "approve", "schedule"]:
         sub.add_parser(name, help=f"{name} (Phase 1)").set_defaults(func=_stub(name))
 
     sub.add_parser("worker", help="run the background worker loop").set_defaults(func=cmd_worker)
