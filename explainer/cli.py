@@ -449,6 +449,30 @@ def cmd_schedule(args):
         print(f"  {ok} {r['service']}: {r.get('post_id') or r.get('error')}")
 
 
+def cmd_cache(args):
+    """Inspect / seed the persistent content cache (transcripts, generated videos,
+    accent clips, SVGs) — reusable across videos."""
+    store.init_db()
+    from explainer import cache as cch
+    if args.action == "backfill":
+        made = cch.backfill()
+        print(f"backfilled {made} item(s) into the content cache")
+    elif args.action == "list":
+        rows = cch.find(kind=args.kind or None, label=args.label or None,
+                        text=args.text or None)
+        for r in rows:
+            print(f"  [{r.kind:9}] {r.path}  {cch.human_bytes(r.bytes)}  "
+                  f"x{r.use_count}  labels={r.labels}  src={(r.source or '')[:48]}")
+        print(f"{len(rows)} item(s)")
+    else:  # stats (default)
+        s = cch.stats()
+        print(f"content cache: {s['total_items']} items, "
+              f"{cch.human_bytes(s['total_bytes'])} total")
+        for kind, d in sorted(s["by_kind"].items()):
+            print(f"  {kind:10} {d['count']:4}  {cch.human_bytes(d['bytes']):>9}"
+                  f"   ({d['reuses']} reuse(s))")
+
+
 def cmd_worker(args):
     """Background loop: tick the 1/day scheduler. (Optional radar lands in Phase 3.)"""
     store.init_db()
@@ -529,6 +553,14 @@ def main():
     cp = sub.add_parser("schedule", help="drip the next ready project (or --project-id)")
     cp.add_argument("--project-id", type=int, default=0, help="schedule a specific project")
     cp.set_defaults(func=cmd_schedule)
+
+    chp = sub.add_parser("cache", help="inspect/seed the persistent content cache")
+    chp.add_argument("action", nargs="?", default="stats",
+                     choices=["stats", "list", "backfill"])
+    chp.add_argument("--kind", default="", help="filter: video|image|transcript|clip|svg|youtube|audio")
+    chp.add_argument("--label", default="", help="filter by a concept/keyword label")
+    chp.add_argument("--text", default="", help="filter by substring in source/labels")
+    chp.set_defaults(func=cmd_cache)
 
     sub.add_parser("worker", help="run the background worker loop").set_defaults(func=cmd_worker)
 

@@ -102,6 +102,31 @@ class Voice(Base):
     retention = Column(Float, default=0.0)     # A/B signal
 
 
+class CacheItem(Base):
+    """Persistent, labeled, enriched content cache — reuse transcripts, generated
+    videos/images, YouTube downloads, accent clips, and SVGs across videos. Files are
+    content-addressed under EXPLAINER_CACHE; a `ref_key` dedupes by MEANING (a video
+    by model+prompt+size+duration, a transcript by video id) so we never pay to
+    regenerate the same thing. See explainer/cache.py."""
+    __tablename__ = "cache_items"
+    id = Column(Integer, primary_key=True)
+    kind = Column(String, index=True)          # video|image|transcript|youtube|clip|svg|audio
+    sha256 = Column(String, index=True)        # content hash (dedupe identical bytes)
+    ref_key = Column(String, index=True)       # semantic dedupe key (reuse-by-meaning)
+    path = Column(String, default="")          # location under the cache dir (relative)
+    bytes = Column(Integer, default=0)
+    mime = Column(String, default="")
+    source = Column(Text, default="")          # prompt (generated) OR url (fetched)
+    model = Column(String, default="")         # generator model, if any
+    size = Column(String, default="")          # e.g. 720x1280
+    duration_s = Column(Float, default=0.0)
+    labels = Column(JSON, default=list)        # concept tags / keywords for classify+reuse
+    meta = Column(JSON, default=dict)          # cost, channel, in/out, extra enrichment
+    use_count = Column(Integer, default=1)     # how many times reused (savings signal)
+    created_at = Column(DateTime, default=_now)
+    last_used_at = Column(DateTime, default=_now, onupdate=_now)
+
+
 def init_db():
     Base.metadata.create_all(engine)
     return DB_PATH

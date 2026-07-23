@@ -60,6 +60,7 @@ def fetch_clip(url, start_s, end_s, out_path):
     section = f"*{float(start_s):.2f}-{float(end_s):.2f}"
     cmd = [
         "yt-dlp", "--no-playlist",
+        "--force-overwrites",          # re-fetch cleanly if the window changed (don't keep a stale clip)
         "--download-sections", section,
         "--force-keyframes-at-cuts",
         "-f", "bv*[height<=1920]+ba/b",

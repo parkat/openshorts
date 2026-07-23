@@ -15,6 +15,8 @@ import os
 import glob
 
 import openrouter_client as orc
+from explainer import cache
+from explainer.assets import svg as _svg   # reuse its keyword extractor for labels
 
 AID_SHOT = "aid"
 SIZE = "720x1280"          # vertical 9:16 (per parkat)
@@ -62,17 +64,26 @@ def generate_aids(shots, out_dir, key=None, log=print):
         if shot.get("visual") != AID_SHOT:
             continue
         note = (shot.get("visual_note") or "").strip()
+        labels = _svg._keywords(note)[:12]
         n = _n_clips(shot)
         for j in range(n):
             out = _clip_path(out_dir, i, j)
             if os.path.isfile(out):
-                continue  # reuse
+                continue  # already in this project
             stage = f" Show {STAGES[j]}." if n > 1 else ""
             prompt = note + stage + STYLE
+            rk = cache.ref_for_video(orc.VIDEO_MODEL, prompt, SIZE, DURATION)
+            hit = cache.reuse(rk)
+            if hit and cache.materialize(hit, out):
+                log(f"  aid {i}.{j} <- cache reuse (no OpenRouter spend)")
+                continue
             try:
                 res = orc.generate_video(prompt, out, size=SIZE, duration=DURATION, key=key)
                 cost += res.get("cost") or 0.0
                 made += 1
+                cache.put("video", out, ref_key=rk, source=prompt, model=orc.VIDEO_MODEL,
+                          size=SIZE, duration_s=DURATION, labels=labels,
+                          meta={"cost": res.get("cost"), "shot": i})
                 log(f"  aid {i}.{j} -> {os.path.basename(out)} (${res.get('cost')})")
             except Exception as e:  # noqa: BLE001 — one failed clip shouldn't abort
                 log(f"  aid {i}.{j} FAILED: {e}")
