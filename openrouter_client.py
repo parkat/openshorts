@@ -139,7 +139,7 @@ def tts(text, voice="Puck", model=None, out_path=None, response_format="pcm",
 # --- video generation: dedicated async /videos endpoint (submit -> poll -> pull) ---
 import time
 
-VIDEO_MODEL = "google/veo-3.1-lite"   # Veo 3.1 Lite (720p ~$0.03/s no-audio; durations 4/6/8)
+VIDEO_MODEL = "google/veo-3.1-fast"   # Veo 3.1 Fast (720p ~$0.08/s no-audio; durations 4/6/8)
 
 
 def generate_video(prompt, out_path, model=None, size="720x1280", duration=4,
