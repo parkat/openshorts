@@ -8,10 +8,11 @@ import os
 import wave
 
 import openrouter_client as orc
+from explainer.brand import BRAND
 
 SAMPLE_RATE = 24000            # Gemini TTS PCM
 SAMPLE_WIDTH = 2               # 16-bit
-DEFAULT_VOICE = "Puck"
+DEFAULT_VOICE = BRAND.get("voice", "Orus")
 
 
 def narration_text(script):

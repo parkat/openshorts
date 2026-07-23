@@ -33,6 +33,10 @@ BRAND = {
         "display": "geometric retro sans (Eurostile / Futura family)",
         "caption": "bold condensed sans",
     },
+
+    # Narration — chosen deep-male voice (2026-07-22). A/B baseline.
+    "voice": "Orus",
+    "tts_model": "google/gemini-3.1-flash-tts-preview",
     # Subtle VHS treatment on the Remotion composite (kept tasteful, not gimmicky).
     "vhs": {"scanlines": True, "grain": "light", "chroma_wobble": "subtle"},
 
