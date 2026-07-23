@@ -113,6 +113,11 @@ def build_scene_list(alignment, assets=None):
                 scene["beats"] = _beats_for(scene["startMs"], scene["endMs"], words)
         else:
             scene["text"] = _headline(shot)
+            # Text beats can carry an animated SVG graphic (user file or built-in).
+            if a.get("svgUrl"):
+                scene["svgUrl"] = a["svgUrl"]
+            elif a.get("svgKind"):
+                scene["svgKind"] = a["svgKind"]
         scenes.append(scene)
     return scenes
 

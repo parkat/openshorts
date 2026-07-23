@@ -190,6 +190,14 @@ def cmd_assets(args):
             else:
                 print("  ⚠️ no PIXABAY key in .env — figure/broll shots fall back to text "
                       "(add PIXABAY, or use --ai-visuals).")
+        # 1c) Animated SVG graphics for text beats (user folder or built-in).
+        if not args.no_svg:
+            from explainer.assets import svg as svgmod
+            n_text = sum(1 for sh in shots if sh.get("visual") in svgmod._TEXT_SHOTS)
+            if n_text:
+                sa, got = svgmod.gather_svgs(shots, proj_dir, sa)
+                if got:
+                    print(f"svg graphics: {got}/{n_text} text beat(s)")
         manifest["shot_assets"] = {str(k): v for k, v in sa.items()}
 
         # 2) Narration. Soundbite shorts assemble a mixed timeline (Orus + silence
@@ -470,6 +478,7 @@ def main():
     ap.add_argument("--no-visuals", action="store_true", help="skip b-roll for figure/broll shots")
     ap.add_argument("--ai-visuals", action="store_true",
                     help="use AI-generated stills instead of real stock footage (adds AI label)")
+    ap.add_argument("--no-svg", action="store_true", help="skip SVG graphics on text beats")
     ap.add_argument("--speed", type=float, default=1.0,
                     help="narration tempo multiplier (e.g. 1.15 = 15%% faster, pitch preserved)")
     ap.add_argument("--no-music", action="store_true", help="skip the music bed")

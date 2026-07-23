@@ -22,6 +22,8 @@ export interface ExplainerScene {
   endMs: number;
   role?: string; // hook | setup | thing | why | button
   text?: string; // headline for slide / motion_text
+  svgUrl?: string; // a user-supplied SVG (served over http) to animate on this beat
+  svgKind?: string; // OR a built-in animated SVG graphic key (network|warning|bars)
   imageUrl?: string; // single figure / slide background (served over http)
   images?: string[]; // multiple stills -> hard jump-cuts between them within the shot
   videoUrl?: string; // single accent_clip source (talking head, continuous)
@@ -72,6 +74,8 @@ export const explainerSceneSchema = z.object({
   endMs: z.number().min(0),
   role: z.string().optional(),
   text: z.string().optional(),
+  svgUrl: z.string().optional(),
+  svgKind: z.string().optional(),
   imageUrl: z.string().optional(),
   images: z.array(z.string()).optional(),
   videoUrl: z.string().optional(),

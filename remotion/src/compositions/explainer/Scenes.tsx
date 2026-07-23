@@ -11,6 +11,7 @@ import {
   useVideoConfig,
 } from "remotion";
 import type { ExplainerScene, ExplainerTheme } from "../../lib/explainer-types";
+import { SvgScene, hasSvg } from "./SvgGraphics";
 
 // Short-form retention: hard-cut / punch to a new visual about this often.
 const BEAT_SEC = 1.0;
@@ -335,5 +336,7 @@ export const SceneRenderer: React.FC<SceneProps> = ({ scene, theme }) => {
   if (imgs.length) return <ImageScene images={imgs} beats={scene.beats} />;
   if (scene.type === "figure" && (scene.text ?? "").trim())
     return <StatScene scene={scene} theme={theme} />;
+  // Text beat: an animated SVG graphic if one was assigned, else the backdrop.
+  if (hasSvg(scene)) return <SvgScene scene={scene} theme={theme} />;
   return <AnimatedBackdrop theme={theme} role={scene.role} />;
 };
