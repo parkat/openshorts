@@ -73,6 +73,7 @@ def build_scene_list(alignment, assets=None):
     A media scene with no asset downgrades to a slide so the render never breaks.
     """
     assets = assets or {}
+    words = alignment.get("words", [])
     scenes = []
     for shot in alignment.get("shots", []):
         idx = shot.get("index")
@@ -107,6 +108,9 @@ def build_scene_list(alignment, assets=None):
                 # No footage — keep the type (figure -> big stat, else animated
                 # backdrop); the captions carry the spoken words, not a headline.
                 scene["text"] = _headline(shot)
+            # Speech-aligned, variable cut lengths for a montage (>1 clip/still).
+            if len(scene.get("videos") or []) > 1 or len(scene.get("images") or []) > 1:
+                scene["beats"] = _beats_for(scene["startMs"], scene["endMs"], words)
         else:
             scene["text"] = _headline(shot)
         scenes.append(scene)
@@ -128,6 +132,37 @@ def shot_assets_from_clips(shots, fetched_clips, job_id):
                 entry["attribution"] = f"via {c['channel']}"
             out[i] = entry
     return out
+
+
+def _beats_for(start_ms, end_ms, words, min_ms=750, max_ms=2000):
+    """Variable cut lengths (0.75–2.0s) for a montage shot, landing each cut on the
+    biggest PAUSE in the window so cuts fall on natural speech phrasing instead of a
+    rigid metronome. Returns segment durations (ms) that tile [start_ms, end_ms]."""
+    dur = end_ms - start_ms
+    if dur <= max_ms:
+        return [dur]
+    bounds = [w["endMs"] for w in words if start_ms < w["endMs"] < end_ms]
+    starts = sorted(w["startMs"] for w in words)
+
+    def pause_after(b):
+        # gap to the next word that starts at/after this boundary; back-to-back
+        # words (next start == b) score 0, a real pause scores high.
+        nxt = next((s for s in starts if s >= b), end_ms)
+        return nxt - b
+
+    segs, cursor = [], start_ms
+    while end_ms - cursor > max_ms:
+        lo, hi = cursor + min_ms, cursor + max_ms
+        cands = [b for b in bounds if lo <= b <= hi]
+        cut = max(cands, key=pause_after) if cands else hi
+        segs.append(int(cut - cursor))
+        cursor = cut
+    remainder = end_ms - cursor
+    if remainder < min_ms and segs:      # fold a short tail into the last cut
+        segs[-1] += int(remainder)
+    else:
+        segs.append(int(remainder))
+    return segs
 
 
 def accent_display_fraction(scenes):

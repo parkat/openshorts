@@ -44,21 +44,34 @@ function punchStyle(beat: number): React.CSSProperties {
   return { transform: `scale(${p.scale}) translate(${p.x}%, ${p.y}%)` };
 }
 
-/** Split the current shot into ~BEAT_SEC beats and render each with a hard cut. */
-const Beats: React.FC<{ children: (beat: number, beatFrames: number) => React.ReactNode }> = ({
-  children,
-}) => {
+/** Split the shot into beats and render each with a hard cut. Uses the explicit,
+ * speech-aligned `beatsMs` (variable 0.75–2.0s cuts from render.py) when provided;
+ * otherwise falls back to uniform ~BEAT_SEC beats. */
+const Beats: React.FC<{
+  beatsMs?: number[];
+  children: (beat: number, beatFrames: number) => React.ReactNode;
+}> = ({ beatsMs, children }) => {
   const { durationInFrames, fps } = useVideoConfig();
-  const bf = Math.max(1, Math.round(BEAT_SEC * fps));
-  const n = Math.max(1, Math.round(durationInFrames / bf));
-  const each = Math.ceil(durationInFrames / n);
+  let lengths: number[];
+  if (beatsMs && beatsMs.length) {
+    lengths = beatsMs.map((ms) => Math.max(1, Math.round((ms / 1000) * fps)));
+  } else {
+    const bf = Math.max(1, Math.round(BEAT_SEC * fps));
+    const n = Math.max(1, Math.round(durationInFrames / bf));
+    lengths = Array.from({ length: n }, () => Math.ceil(durationInFrames / n));
+  }
+  let from = 0;
   return (
     <>
-      {Array.from({ length: n }).map((_, b) => (
-        <Sequence key={b} from={b * each} durationInFrames={each} layout="none">
-          {children(b, bf)}
-        </Sequence>
-      ))}
+      {lengths.map((len, b) => {
+        const el = (
+          <Sequence key={b} from={from} durationInFrames={len} layout="none">
+            {children(b, len)}
+          </Sequence>
+        );
+        from += len;
+        return el;
+      })}
     </>
   );
 };
@@ -122,7 +135,7 @@ const VideoClip: React.FC<{ src: string }> = ({ src }) => {
 
 /** Stock b-roll. One clip -> plays continuously (no awkward same-clip skipping);
  * multiple clips -> hard-cut between DISTINCT footage each beat (a real montage). */
-const StockVideo: React.FC<{ videos: string[] }> = ({ videos }) => {
+const StockVideo: React.FC<{ videos: string[]; beats?: number[] }> = ({ videos, beats }) => {
   if (videos.length <= 1) {
     return (
       <AbsoluteFill style={{ backgroundColor: "#000" }}>
@@ -132,7 +145,7 @@ const StockVideo: React.FC<{ videos: string[] }> = ({ videos }) => {
   }
   return (
     <AbsoluteFill style={{ backgroundColor: "#000" }}>
-      <Beats>
+      <Beats beatsMs={beats}>
         {(b) => (
           <AbsoluteFill>
             <VideoClip src={videos[b % videos.length]} />
@@ -144,9 +157,9 @@ const StockVideo: React.FC<{ videos: string[] }> = ({ videos }) => {
 };
 
 /** Generated stills, jump-cut between them with Ken Burns + punch each beat. */
-const ImageScene: React.FC<{ images: string[] }> = ({ images }) => (
+const ImageScene: React.FC<{ images: string[]; beats?: number[] }> = ({ images, beats }) => (
   <AbsoluteFill style={{ backgroundColor: "#000" }}>
-    <Beats>
+    <Beats beatsMs={beats}>
       {(b) => (
         <AbsoluteFill style={punchStyle(b)}>
           <KenBurns src={images[b % images.length]} seed={b + 1} />
@@ -317,9 +330,9 @@ export const SceneRenderer: React.FC<SceneProps> = ({ scene, theme }) => {
     );
   }
   const vids = sceneVideos(scene);
-  if (vids.length) return <StockVideo videos={vids} />;
+  if (vids.length) return <StockVideo videos={vids} beats={scene.beats} />;
   const imgs = sceneImages(scene);
-  if (imgs.length) return <ImageScene images={imgs} />;
+  if (imgs.length) return <ImageScene images={imgs} beats={scene.beats} />;
   if (scene.type === "figure" && (scene.text ?? "").trim())
     return <StatScene scene={scene} theme={theme} />;
   return <AnimatedBackdrop theme={theme} role={scene.role} />;

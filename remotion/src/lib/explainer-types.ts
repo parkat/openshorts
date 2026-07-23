@@ -26,6 +26,7 @@ export interface ExplainerScene {
   images?: string[]; // multiple stills -> hard jump-cuts between them within the shot
   videoUrl?: string; // single accent_clip source (talking head, continuous)
   videos?: string[]; // multiple stock clips -> montage / cut between distinct footage
+  beats?: number[]; // per-segment durations (ms) for a montage — speech-aligned cuts
   attribution?: string; // "via <source>" overlay while an accent clip plays
   duckAudio?: boolean; // accent clip: mute/duck its own audio under narration
 }
@@ -75,6 +76,7 @@ export const explainerSceneSchema = z.object({
   images: z.array(z.string()).optional(),
   videoUrl: z.string().optional(),
   videos: z.array(z.string()).optional(),
+  beats: z.array(z.number()).optional(),
   attribution: z.string().optional(),
   duckAudio: z.boolean().optional(),
 });
