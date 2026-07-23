@@ -16,11 +16,30 @@ services:
   frontend:
     build: ./dashboard
     container_name: openshorts-frontend
+    # Served as a PRODUCTION build (vite preview), not the dev server: behind
+    # Cloudflare Access the dev server's HMR websocket can't connect and the
+    # client reload-loops. `docker restart openshorts-frontend` re-builds + serves.
+    command: sh -c "npm run build && npm run preview -- --host --port 5173"
     ports:
       - "5175:5173"
     volumes:
       - ./dashboard:/app
       - /app/node_modules
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+  # Explainer-lane background worker: scheduler drip + (optional) topic radar.
+  # No GPU needed. Shares code + the ./archive SQLite DB with the backend.
+  worker:
+    build: .
+    container_name: openshorts-worker
+    command: python -m explainer worker
+    volumes:
+      - .:/app
+      - /app/__pycache__
+      - ./output:/app/output
+      - ${ARCHIVE_HOST_DIR:-./archive}:/app/archive
     restart: unless-stopped
     depends_on:
       - backend
