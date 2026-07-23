@@ -45,8 +45,11 @@ def video_meta(url):
     return vid, dur, uploader, title
 
 
-def fetch_vtt(url, workdir):
-    """Download English auto-captions to a VTT and return its path (or None)."""
+def fetch_vtt(url, workdir, vid=None):
+    """Download English auto-captions and return THIS video's VTT path (or None).
+
+    Matched by video id so a multi-reference run never grabs another video's file;
+    prefers the plain `en` track over `en-orig` (either parses fine)."""
     os.makedirs(workdir, exist_ok=True)
     tmpl = os.path.join(workdir, "ref_%(id)s")
     subprocess.run(
@@ -54,9 +57,13 @@ def fetch_vtt(url, workdir):
          "--write-auto-subs", "--write-subs", "--sub-langs", "en.*,en",
          "--sub-format", "vtt", "-o", tmpl, url],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    vtts = sorted(glob.glob(os.path.join(workdir, "ref_*.vtt")))
-    # Prefer a plain en over en-orig if both exist (either is fine).
-    return vtts[0] if vtts else None
+    pat = f"ref_{vid}" if vid else "ref_"
+    cands = sorted(glob.glob(os.path.join(workdir, f"{pat}*.vtt")))
+    if not cands:
+        return None
+    # Prefer "<id>.en.vtt" over "<id>.en-orig.vtt".
+    plain = [c for c in cands if c.endswith(".en.vtt")]
+    return (plain or cands)[0]
 
 
 def _clean(text):
@@ -121,10 +128,11 @@ def parse_vtt(path):
 def load_reference(url, workdir):
     """{index-less} reference dict: {url, channel, duration, title, segments}."""
     meta = video_meta(url)
+    vid = meta[0] if meta else None
     channel = meta[2] if meta else ""
     title = meta[3] if meta else ""
     duration = meta[1] if meta else 0.0
-    vtt = fetch_vtt(url, workdir)
+    vtt = fetch_vtt(url, workdir, vid)
     segments = parse_vtt(vtt) if vtt else []
     return {"url": url, "channel": channel, "title": title,
             "duration": duration, "segments": segments}
@@ -184,8 +192,10 @@ def select_windows(needs, references, model=None, key=None):
     out = orc.chat([{"role": "system", "content": SYSTEM},
                     {"role": "user", "content": user}],
                    model=model or orc.MODELS["polish"], temperature=0.2,
-                   max_tokens=1500, key=key)
-    out = out.strip()
+                   max_tokens=3000, key=key)
+    out = (out or "").strip()
+    if not out:
+        raise ValueError("clip selection returned empty (model truncated) — retry")
     if out.startswith("```"):
         out = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", out).strip()
     m = re.search(r"\{.*\}", out, re.S)
