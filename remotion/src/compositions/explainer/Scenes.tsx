@@ -93,24 +93,55 @@ function sceneImages(scene: ExplainerScene): string[] {
   return [];
 }
 
-/** Real stock video, full-bleed, advancing through the clip with a punch cut each
- * beat so it never sits static. */
-const StockVideo: React.FC<{ src: string }> = ({ src }) => (
-  <AbsoluteFill style={{ backgroundColor: "#000" }}>
-    <Beats>
-      {(b, bf) => (
-        <AbsoluteFill style={punchStyle(b)}>
-          <OffthreadVideo
-            src={src}
-            muted
-            startFrom={b * bf}
-            style={{ width: "100%", height: "100%", objectFit: "cover" }}
-          />
-        </AbsoluteFill>
-      )}
-    </Beats>
-  </AbsoluteFill>
-);
+function sceneVideos(scene: ExplainerScene): string[] {
+  if (scene.videos && scene.videos.length) return scene.videos;
+  if (scene.videoUrl) return [scene.videoUrl];
+  return [];
+}
+
+/** One stock clip, full-bleed with a gentle push-in (natural footage motion). */
+const VideoClip: React.FC<{ src: string }> = ({ src }) => {
+  const frame = useCurrentFrame();
+  const { durationInFrames } = useVideoConfig();
+  const t = interpolate(frame, [0, Math.max(1, durationInFrames)], [0, 1], {
+    extrapolateRight: "clamp",
+  });
+  return (
+    <OffthreadVideo
+      src={src}
+      muted
+      style={{
+        width: "100%",
+        height: "100%",
+        objectFit: "cover",
+        transform: `scale(${1.04 + 0.1 * t})`,
+      }}
+    />
+  );
+};
+
+/** Stock b-roll. One clip -> plays continuously (no awkward same-clip skipping);
+ * multiple clips -> hard-cut between DISTINCT footage each beat (a real montage). */
+const StockVideo: React.FC<{ videos: string[] }> = ({ videos }) => {
+  if (videos.length <= 1) {
+    return (
+      <AbsoluteFill style={{ backgroundColor: "#000" }}>
+        <VideoClip src={videos[0]} />
+      </AbsoluteFill>
+    );
+  }
+  return (
+    <AbsoluteFill style={{ backgroundColor: "#000" }}>
+      <Beats>
+        {(b) => (
+          <AbsoluteFill>
+            <VideoClip src={videos[b % videos.length]} />
+          </AbsoluteFill>
+        )}
+      </Beats>
+    </AbsoluteFill>
+  );
+};
 
 /** Generated stills, jump-cut between them with Ken Burns + punch each beat. */
 const ImageScene: React.FC<{ images: string[] }> = ({ images }) => (
@@ -277,7 +308,7 @@ export const AccentClipScene: React.FC<SceneProps> = ({ scene, theme }) => (
 /** Dispatch a scene to its renderer. Captions (global layer) always carry the
  * spoken words; scenes are visuals only (footage, animated backdrop, or a stat). */
 export const SceneRenderer: React.FC<SceneProps> = ({ scene, theme }) => {
-  const imgs = sceneImages(scene);
+  // Accent talking-head: single clip, continuous (never chop the speaker).
   if (scene.type === "accent_clip") {
     return scene.videoUrl ? (
       <AccentClipScene scene={scene} theme={theme} />
@@ -285,7 +316,9 @@ export const SceneRenderer: React.FC<SceneProps> = ({ scene, theme }) => {
       <AnimatedBackdrop theme={theme} role={scene.role} />
     );
   }
-  if (scene.videoUrl) return <StockVideo src={scene.videoUrl} />;
+  const vids = sceneVideos(scene);
+  if (vids.length) return <StockVideo videos={vids} />;
+  const imgs = sceneImages(scene);
   if (imgs.length) return <ImageScene images={imgs} />;
   if (scene.type === "figure" && (scene.text ?? "").trim())
     return <StatScene scene={scene} theme={theme} />;

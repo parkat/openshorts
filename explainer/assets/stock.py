@@ -39,22 +39,30 @@ def search(query, key, per_page=20):
     return r.json().get("hits", [])
 
 
-def best_clip(hits):
-    """Pick a download URL. Per the docs, `large` can come back empty (url="",
-    size 0) while `medium` is available for ALL videos — so take the biggest
-    NON-EMPTY stream per hit, then prefer vertical clips and higher resolution."""
-    best, best_score = None, -1
-    for h in hits:
-        vids = h.get("videos") or {}
-        stream = next((vids[s] for s in ("large", "medium", "small", "tiny")
-                       if (vids.get(s) or {}).get("url") and vids[s].get("size")), None)
-        if not stream:
-            continue
-        w, ht = stream.get("width", 0), stream.get("height", 0)
-        score = (10000 if ht > w else 0) + min(ht, 2160)
-        if score > best_score:
-            best, best_score = stream["url"], score
-    return best
+def _stream(hit):
+    """The biggest NON-EMPTY stream of a hit (large can be empty; medium always
+    exists), or None. Returns (score, url) — score prefers vertical + resolution."""
+    vids = hit.get("videos") or {}
+    stream = next((vids[s] for s in ("large", "medium", "small", "tiny")
+                   if (vids.get(s) or {}).get("url") and vids[s].get("size")), None)
+    if not stream:
+        return None
+    w, ht = stream.get("width", 0), stream.get("height", 0)
+    return ((10000 if ht > w else 0) + min(ht, 2160), stream["url"])
+
+
+def top_clips(hits, n):
+    """Up to n DISTINCT download URLs, best first — so a b-roll shot can cut between
+    different clips instead of skipping around inside one."""
+    scored = sorted((s for s in (_stream(h) for h in hits) if s), key=lambda x: -x[0])
+    out, seen = [], set()
+    for _, url in scored:
+        if url not in seen:
+            seen.add(url)
+            out.append(url)
+        if len(out) >= n:
+            break
+    return out
 
 
 def download(url, out_path):
@@ -66,34 +74,43 @@ def download(url, out_path):
     return out_path
 
 
-def fetch_for_shot(shot, out_dir, index, key):
-    """Search + download one stock clip for a shot; return its /output URL or None."""
-    hits = search(keywords(shot), key)
-    url = best_clip(hits)
-    if not url:
-        return None
-    out = os.path.join(out_dir, f"broll_{index}.mp4")
-    download(url, out)
-    return f"/output/{os.path.basename(out_dir)}/{os.path.basename(out)}"
+CLIPS_PER_SHOT = int(os.environ.get("EXPLAINER_STOCK_CLIPS", "3"))
+
+
+def fetch_for_shot(shot, out_dir, index, key, n=CLIPS_PER_SHOT):
+    """Search + download up to n DISTINCT stock clips for a shot; return their
+    /output URLs (the render cuts between them). Empty if nothing downloads."""
+    urls = top_clips(search(keywords(shot), key), n)
+    out_urls = []
+    for j, url in enumerate(urls):
+        out = os.path.join(out_dir, f"broll_{index}_{j}.mp4")
+        try:
+            download(url, out)
+            out_urls.append(f"/output/{os.path.basename(out_dir)}/{os.path.basename(out)}")
+        except Exception:  # noqa: BLE001 — skip a clip that won't download
+            continue
+    return out_urls
 
 
 def gather_stock(shots, out_dir, shot_assets, key):
-    """Fetch stock b-roll for figure/broll shots not already covered by a clip or
-    stills. Merges {shot_index: {"videoUrl": ...}} into a copy of shot_assets."""
+    """Fetch stock b-roll for broll shots not already covered. Merges {shot_index:
+    {"videos": [...]}} into a copy of shot_assets (multiple clips per shot so the
+    render cuts between distinct footage, not around one clip)."""
     merged = {int(k): dict(v) for k, v in (shot_assets or {}).items()}
     got = 0
     for i, shot in enumerate(shots):
-        # Only broll wants stock footage; figure = an on-screen stat/label (text),
-        # accent_clip = reference footage. Stock for a stat -> irrelevant clips.
+        # Only broll wants stock footage; figure = a big number (text), accent_clip
+        # = reference footage.
         if shot.get("visual") != "broll":
             continue
-        if merged.get(i, {}).get("videoUrl") or merged.get(i, {}).get("images"):
+        e = merged.get(i, {})
+        if e.get("videos") or e.get("videoUrl") or e.get("images"):
             continue
         try:
-            url = fetch_for_shot(shot, out_dir, i, key)
-        except Exception:  # noqa: BLE001 — a missing clip just falls back to text
-            url = None
-        if url:
-            merged.setdefault(i, {})["videoUrl"] = url
+            urls = fetch_for_shot(shot, out_dir, i, key)
+        except Exception:  # noqa: BLE001 — a missing shot just falls back to backdrop
+            urls = []
+        if urls:
+            merged.setdefault(i, {})["videos"] = urls
             got += 1
     return merged, got

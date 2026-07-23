@@ -24,7 +24,8 @@ export interface ExplainerScene {
   text?: string; // headline for slide / motion_text
   imageUrl?: string; // single figure / slide background (served over http)
   images?: string[]; // multiple stills -> hard jump-cuts between them within the shot
-  videoUrl?: string; // accent_clip / broll source
+  videoUrl?: string; // single accent_clip source (talking head, continuous)
+  videos?: string[]; // multiple stock clips -> montage / cut between distinct footage
   attribution?: string; // "via <source>" overlay while an accent clip plays
   duckAudio?: boolean; // accent clip: mute/duck its own audio under narration
 }
@@ -73,6 +74,7 @@ export const explainerSceneSchema = z.object({
   imageUrl: z.string().optional(),
   images: z.array(z.string()).optional(),
   videoUrl: z.string().optional(),
+  videos: z.array(z.string()).optional(),
   attribution: z.string().optional(),
   duckAudio: z.boolean().optional(),
 });

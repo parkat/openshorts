@@ -90,9 +90,11 @@ def build_scene_list(alignment, assets=None):
                 scene["images"] = a["images"]
             if a.get("imageUrl"):
                 scene["imageUrl"] = a["imageUrl"]
+            if a.get("videos"):
+                scene["videos"] = a["videos"]
             if a.get("videoUrl"):
                 scene["videoUrl"] = a["videoUrl"]
-            has_media = any(scene.get(k) for k in ("images", "imageUrl", "videoUrl"))
+            has_media = any(scene.get(k) for k in ("images", "imageUrl", "videoUrl", "videos"))
             if visual == "accent_clip" and scene.get("videoUrl"):
                 src = shot.get("source")
                 scene["attribution"] = a.get("attribution") or (
