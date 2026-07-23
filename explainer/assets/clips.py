@@ -11,6 +11,7 @@ import os
 import subprocess
 
 import store
+from explainer import transcript as tr
 
 # Fair-use thresholds (§5). Overridable in gate 1.
 SOFT_CLIP_S = 15.0      # warn beyond this per clip
@@ -108,6 +109,16 @@ def gather_from_plan(session, project_id, selections, out_dir, narration_seconds
             entry = {"videoUrl": rel, "speechUrl": rel}
             if sel.get("channel"):
                 entry["attribution"] = f"via {sel['channel']}"
+            # Pull the video's OWN captions for this window (no ASR) — align uses these
+            # for the soundbite's words and only falls back to whisper if they're
+            # missing/malformed.
+            try:
+                vtt = tr.ensure_vtt(sel.get("url", ""), out_dir)
+                wjson = os.path.join(out_dir, f"clip{k}.words.json")
+                if vtt and tr.save_window(vtt, start_s, end_s, wjson):
+                    entry["wordsUrl"] = f"/output/{job_id}/{os.path.basename(wjson)}"
+            except Exception:  # noqa: BLE001 — captions are best-effort; ASR covers it
+                pass
             shot_assets[int(sel["shot_index"])] = entry
         except Exception as e:  # noqa: BLE001 — surface as a fixable flag, don't abort
             prefetch_flags.append({"level": "block", "code": "fetch_failed",

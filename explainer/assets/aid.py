@@ -20,7 +20,7 @@ from explainer.assets import svg as _svg   # reuse its keyword extractor for lab
 
 AID_SHOT = "aid"
 SIZE = "720x1280"          # vertical 9:16 (per parkat)
-DURATION = 5              # <=5s per clip (per parkat)
+DURATION = 4              # <=5s per clip; Veo 3.1 Lite supports 4/6/8 (see openrouter_client)
 
 # Brand style suffix — identical language to the SVG/icon formula so aid clips read
 # as the same channel: flat vector, cream field, ink outlines, muted rainbow, VHS.

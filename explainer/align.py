@@ -165,33 +165,29 @@ def _shots_from_timeline(shots, timeline, duration_ms):
     return out
 
 
-def _caption_soundbites(words, timeline, soundbite_clips):
-    """Fill the silent soundbite gaps with the speaker's OWN words: transcribe each
-    soundbite clip and place its words at the segment's offset on the master
-    timeline. Without this, muted viewers get no captions while the clip speaks."""
-    for seg in timeline or []:
-        if seg.get("kind") != "soundbite":
-            continue
-        clip = (soundbite_clips or {}).get(seg["shot_index"])
-        if not clip or not os.path.isfile(clip):
-            continue
-        offset = seg["start_ms"]
-        for w in _flatten_words(subtitles.transcribe_audio(clip)):
-            words.append({"text": w["text"], "startMs": offset + w["startMs"],
-                          "endMs": offset + w["endMs"]})
-    words.sort(key=lambda w: w["startMs"])
-    return words
+def _soundbite_words(seg, soundbite_words, soundbite_clips):
+    """Words for one soundbite segment (relative to the segment start). PREFER the
+    video's own pulled captions (no ASR); fall back to whisper on the clip only when
+    the caption track is missing/malformed. Returns (words, source)."""
+    i = seg["shot_index"]
+    pulled = (soundbite_words or {}).get(i)
+    if pulled:
+        return pulled, "captions"
+    clip = (soundbite_clips or {}).get(i)
+    if clip and os.path.isfile(clip):
+        return _flatten_words(subtitles.transcribe_audio(clip)), "asr"
+    return [], "none"
 
 
-def align(audio_path, script, timeline=None, soundbite_clips=None):
+def align(audio_path, script, timeline=None, soundbite_clips=None, soundbite_words=None):
     """Transcribe the narration and map it onto the script's shots.
 
-    Returns {"duration_ms", "words", "shots"} — ready for `render.py` to turn into
-    a Remotion scene list. When an assembly `timeline` is given (mixed narrator +
-    soundbite audio), shot boundaries come from it (authoritative) and whisper is
-    used only for caption words; otherwise shots are aligned from the narration text.
-    `soundbite_clips` ({shot_index: clip_path}) adds the speaker's own words as
-    captions during each soundbite gap.
+    Returns {"duration_ms", "words", "shots"} — ready for `render.py`. With an assembly
+    `timeline` (mixed narrator + baked soundbite audio), shot boundaries come from it
+    (authoritative). Captions are sourced per segment: the NARRATOR (our TTS) is
+    word-timed by whisper; each SOUNDBITE uses the video's OWN pulled captions
+    (`soundbite_words` {shot_index: [{text,startMs,endMs}] relative to the clip}), with
+    whisper on the clip (`soundbite_clips`) as the fallback only.
     """
     shots = script.get("shots") or []
     if not shots:
@@ -202,11 +198,23 @@ def align(audio_path, script, timeline=None, soundbite_clips=None):
     duration_ms = _audio_duration_ms(audio_path, words)
 
     if timeline:
-        # narration.wav now carries the BAKED soundbite audio too, so the single
-        # transcribe above already captured the speaker's words at the correct master
-        # offsets. Running _caption_soundbites here as well would DOUBLE the captions
-        # during every soundbite — so we no longer call it. (`soundbite_clips` is kept
-        # in the signature for callers/back-compat.)
+        sb = [seg for seg in timeline if seg.get("kind") == "soundbite"]
+
+        def _in_sb(w):
+            return any(seg["start_ms"] <= w["startMs"] < seg["end_ms"] for seg in sb)
+
+        # Keep the narrator's whisper words; replace each soundbite region with the
+        # speaker's pulled captions (or ASR fallback) — avoids double captions and
+        # skips ASR on the YouTube audio when its transcript is available.
+        merged = [w for w in words if not _in_sb(w)]
+        for seg in sb:
+            seg_words, _src = _soundbite_words(seg, soundbite_words, soundbite_clips)
+            off = seg["start_ms"]
+            for w in seg_words:
+                merged.append({"text": w["text"], "startMs": off + w["startMs"],
+                               "endMs": off + w["endMs"]})
+        merged.sort(key=lambda w: w["startMs"])
+        words = merged
         aligned = _shots_from_timeline(shots, timeline, duration_ms)
     else:
         ref = _reference_tokens(shots)

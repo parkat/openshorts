@@ -139,19 +139,20 @@ def tts(text, voice="Puck", model=None, out_path=None, response_format="pcm",
 # --- video generation: dedicated async /videos endpoint (submit -> poll -> pull) ---
 import time
 
-VIDEO_MODEL = "alibaba/happyhorse-1.1"   # Alibaba HappyHorse 1.1 (720p 3-15s ~$0.099/s)
+VIDEO_MODEL = "google/veo-3.1-lite"   # Veo 3.1 Lite (720p ~$0.03/s no-audio; durations 4/6/8)
 
 
-def generate_video(prompt, out_path, model=None, size="720x1280", duration=5,
-                   key=None, poll_interval=15, timeout=900, **kw):
+def generate_video(prompt, out_path, model=None, size="720x1280", duration=4,
+                   generate_audio=False, key=None, poll_interval=15, timeout=900, **kw):
     """Text->video via the /videos endpoint. Submits the job, polls until it
     completes, then downloads the mp4 to out_path. Returns {"path", "cost", "id"}.
 
-    `size` is exact WIDTHxHEIGHT (720x1280 = our vertical 9:16); `duration` seconds
-    (HappyHorse supports 3-15). The model has no audio track — the composition mutes
-    all video and drives sound from the narration/soundbite master."""
+    `size` is exact WIDTHxHEIGHT (720x1280 = our vertical 9:16). `duration` seconds —
+    Veo 3.1 Lite supports 4/6/8 (default 4, i.e. <=5). We request `generate_audio`
+    False: the composition mutes all video and drives sound from the narration/
+    soundbite master, and no-audio is the cheaper SKU."""
     body = {"model": model or VIDEO_MODEL, "prompt": prompt, "size": size,
-            "duration": int(duration)}
+            "duration": int(duration), "generate_audio": bool(generate_audio)}
     body.update(kw)
     r = requests.post(f"{BASE}/videos", headers=_headers(key), json=body, timeout=60)
     try:
