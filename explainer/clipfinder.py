@@ -146,7 +146,8 @@ start time in seconds like "[123] ...".
 For EACH need, pick the single best window from ANY reference that a viewer would find
 most compelling and on-point — a punchy, self-contained soundbite that lands the shot's
 idea. Constraints:
-- window length 6-15 seconds; snap `in`/`out` to the transcript timestamps.
+- window length 5-9 seconds — SHORT and punchy for a fast Short; snap `in`/`out` to
+  the transcript timestamps. Pick the single most quotable sentence, not a paragraph.
 - prefer the speaker making the actual claim over throat-clearing/setup.
 - one need may reuse the same reference as another, but not the exact same window.
 - if nothing in the references fits a need, omit it (do NOT force a bad pick).
@@ -220,7 +221,7 @@ def select_windows(needs, references, model=None, key=None):
             continue
         if not (0 <= si < len(references)) or o_s <= i_s:
             continue
-        o_s = min(o_s, i_s + 15.0)          # clamp to the hard soft-window
+        o_s = min(o_s, i_s + 9.0)           # clamp: short, punchy soundbites for a fast Short
         sels.append({"shot_index": int(sel["shot_index"]), "source_index": si,
                      "url": references[si]["url"], "channel": references[si]["channel"],
                      "in": round(i_s, 2), "out": round(o_s, 2),
