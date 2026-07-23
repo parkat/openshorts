@@ -1,8 +1,14 @@
 import React from "react";
 import { Composition } from "remotion";
 import { ShortVideo } from "./compositions/ShortVideo";
+import { ExplainerShort } from "./compositions/ExplainerShort";
 import type { ShortVideoProps } from "./lib/types";
 import { shortVideoPropsSchema } from "./lib/types";
+import type { ExplainerShortProps } from "./lib/explainer-types";
+import {
+  DEFAULT_THEME,
+  explainerShortPropsSchema,
+} from "./lib/explainer-types";
 
 const DEFAULT_PROPS: ShortVideoProps = {
   videoUrl: "",
@@ -72,9 +78,77 @@ const DEFAULT_PROPS: ShortVideoProps = {
   },
 };
 
+const DEFAULT_EXPLAINER_PROPS: ExplainerShortProps = {
+  durationInFrames: 900, // 30s @ 30fps; real value from calculateMetadata
+  fps: 30,
+  width: 1080,
+  height: 1920,
+  narrationUrl: "",
+  musicUrl: null,
+  captions: [
+    { text: "This", startMs: 0, endMs: 400 },
+    { text: "changes", startMs: 400, endMs: 900 },
+    { text: "everything", startMs: 900, endMs: 1600 },
+  ],
+  scenes: [
+    {
+      type: "slide",
+      role: "hook",
+      startMs: 0,
+      endMs: 1600,
+      text: "This changes everything",
+    },
+    {
+      type: "motion_text",
+      role: "why",
+      startMs: 1600,
+      endMs: 3200,
+      text: "and nobody noticed",
+    },
+  ],
+  theme: DEFAULT_THEME,
+};
+
 export const RemotionRoot: React.FC = () => {
   return (
     <>
+      <Composition
+        id="ExplainerShort"
+        schema={explainerShortPropsSchema}
+        component={ExplainerShort}
+        durationInFrames={DEFAULT_EXPLAINER_PROPS.durationInFrames}
+        fps={DEFAULT_EXPLAINER_PROPS.fps}
+        width={DEFAULT_EXPLAINER_PROPS.width}
+        height={DEFAULT_EXPLAINER_PROPS.height}
+        defaultProps={DEFAULT_EXPLAINER_PROPS}
+        // Duration follows the scene list / narration length rather than the 30s
+        // default, so the short is exactly as long as its audio.
+        calculateMetadata={({ props }) => {
+          const p = props as unknown as ExplainerShortProps;
+          const pos = (v: number | undefined, fallback: number) =>
+            typeof v === "number" && v > 0 ? v : fallback;
+          const fps = pos(p.fps, DEFAULT_EXPLAINER_PROPS.fps);
+          const lastMs = (p.scenes ?? []).reduce(
+            (m, s) => Math.max(m, s.endMs || 0),
+            0
+          );
+          const framesFromScenes = Math.round((lastMs / 1000) * fps);
+          return {
+            durationInFrames:
+              framesFromScenes > 0
+                ? framesFromScenes
+                : Math.round(
+                    pos(
+                      p.durationInFrames,
+                      DEFAULT_EXPLAINER_PROPS.durationInFrames
+                    )
+                  ),
+            fps,
+            width: Math.round(pos(p.width, DEFAULT_EXPLAINER_PROPS.width)),
+            height: Math.round(pos(p.height, DEFAULT_EXPLAINER_PROPS.height)),
+          };
+        }}
+      />
       <Composition
         id="ShortVideo"
         schema={shortVideoPropsSchema}
