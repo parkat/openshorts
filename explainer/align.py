@@ -202,7 +202,11 @@ def align(audio_path, script, timeline=None, soundbite_clips=None):
     duration_ms = _audio_duration_ms(audio_path, words)
 
     if timeline:
-        words = _caption_soundbites(words, timeline, soundbite_clips)
+        # narration.wav now carries the BAKED soundbite audio too, so the single
+        # transcribe above already captured the speaker's words at the correct master
+        # offsets. Running _caption_soundbites here as well would DOUBLE the captions
+        # during every soundbite — so we no longer call it. (`soundbite_clips` is kept
+        # in the signature for callers/back-compat.)
         aligned = _shots_from_timeline(shots, timeline, duration_ms)
     else:
         ref = _reference_tokens(shots)
