@@ -67,15 +67,51 @@ def _is_soundbite(shot):
     return bool(shot.get("speaks")) and shot.get("visual") in ("accent_clip", "aid")
 
 
+import math
+
+# The TTS narrator sits around this RMS (measured); soundbites are loudness-matched to
+# it so a quiet lecture-hall clip doesn't play much softer than the narration.
+NARRATION_RMS_DB = -23.0
+PEAK_CEILING_DB = -1.0
+
+
+def _normalize(pcm, target_rms_db=NARRATION_RMS_DB, ceiling_db=PEAK_CEILING_DB):
+    """Loudness-match a soundbite to the narrator's level (peak-limited so it never
+    clips). No-op if it's already close."""
+    pcm = _even(pcm)
+    a = array.array("h")
+    a.frombytes(pcm)
+    n = len(a)
+    if not n:
+        return pcm
+    sumsq, peak = 0, 1
+    for x in a:
+        sumsq += x * x
+        ax = -x if x < 0 else x
+        if ax > peak:
+            peak = ax
+    rms = math.sqrt(sumsq / n) or 1.0
+    gain = ((10 ** (target_rms_db / 20)) * 32767) / rms
+    gain = min(gain, ((10 ** (ceiling_db / 20)) * 32767) / peak)  # avoid clipping
+    if abs(gain - 1.0) < 0.05:
+        return pcm
+    out = array.array("h")
+    for x in a:
+        v = int(x * gain)
+        out.append(32767 if v > 32767 else (-32768 if v < -32768 else v))
+    return out.tobytes()
+
+
 def _clip_pcm(path):
-    """Decode a media file's audio to the master format (24kHz mono s16le) PCM, so a
-    soundbite's real audio can be spliced straight into the narration track (the
-    speaker's voice plays over whatever visual is on screen, all video muted)."""
+    """Decode a media file's audio to the master format (24kHz mono s16le) PCM and
+    loudness-match it to the narrator, so a soundbite's real audio can be spliced
+    straight into the narration track at a consistent level (the speaker's voice plays
+    over whatever visual is on screen, all video muted)."""
     p = subprocess.run(
         ["ffmpeg", "-i", path, "-vn", "-f", "s16le", "-ar", str(SAMPLE_RATE),
          "-ac", "1", "pipe:1"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    return _even(p.stdout or b"")
+    return _normalize(_even(p.stdout or b""))
 
 
 def clip_duration_s(path):
