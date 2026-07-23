@@ -63,7 +63,7 @@ export const DEFAULT_THEME: ExplainerTheme = {
   // Concrete, always-present CSS stacks (headless Chromium has no Futura/Eurostile).
   displayFont: '"Arial Black", "Helvetica Neue", Arial, sans-serif',
   captionFont: '"Arial Black", Impact, "Helvetica Neue", sans-serif',
-  highlight: "#E3C05A",
+  highlight: "#5A7BA6", // active-word caption color (brand blue)
   vhs: true,
 };
 

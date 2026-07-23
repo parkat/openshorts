@@ -88,7 +88,6 @@ const CaptionBlock: React.FC<{
               letterSpacing: "0.01em",
               color: i === active ? theme.highlight : "#FFFFFF",
               textShadow: stroke,
-              transform: i === active ? "scale(1.1)" : "none",
               display: "inline-block",
             }}
           >

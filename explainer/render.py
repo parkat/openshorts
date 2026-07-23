@@ -42,7 +42,7 @@ def brand_theme():
         # Concrete stacks — headless Chromium has no Eurostile/Futura installed.
         "displayFont": '"Arial Black", "Helvetica Neue", Arial, sans-serif',
         "captionFont": '"Arial Black", Impact, "Helvetica Neue", sans-serif',
-        "highlight": p["yellow"],
+        "highlight": p["blue"],   # active-word caption color (brand blue)
         "vhs": bool(BRAND.get("vhs")),
     }
 
