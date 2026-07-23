@@ -144,10 +144,11 @@ must reinforce) and (b) transcripts of reference videos, each line prefixed with
 start time in seconds like "[123] ...".
 
 For EACH need, pick the single best window from ANY reference that a viewer would find
-most compelling and on-point — a punchy, self-contained soundbite that lands the shot's
-idea. Constraints:
-- window length 5-9 seconds — SHORT and punchy for a fast Short; snap `in`/`out` to
-  the transcript timestamps. Pick the single most quotable sentence, not a paragraph.
+most compelling and on-point — a self-contained soundbite that lands the shot's idea in
+the SPEAKER'S OWN VOICE. Constraints:
+- window length 8-16 seconds — a COMPLETE thought/claim in his own words (the speaker
+  narrates this beat), not a fragment and not a rambling paragraph. Snap `in`/`out` to
+  the transcript timestamps; start and end on clean sentence boundaries.
 - prefer the speaker making the actual claim over throat-clearing/setup.
 - one need may reuse the same reference as another, but not the exact same window.
 - if nothing in the references fits a need, omit it (do NOT force a bad pick).
@@ -221,7 +222,7 @@ def select_windows(needs, references, model=None, key=None):
             continue
         if not (0 <= si < len(references)) or o_s <= i_s:
             continue
-        o_s = min(o_s, i_s + 9.0)           # clamp: short, punchy soundbites for a fast Short
+        o_s = min(o_s, i_s + 16.0)          # clamp: complete-thought soundbites (speaker narrates)
         sels.append({"shot_index": int(sel["shot_index"]), "source_index": si,
                      "url": references[si]["url"], "channel": references[si]["channel"],
                      "in": round(i_s, 2), "out": round(o_s, 2),
