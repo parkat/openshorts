@@ -7,6 +7,7 @@ MODELS. IDs below verified live 2026-07 (342 models). Docs:
 https://openrouter.ai/docs  ·  multimodal: /docs/guides/overview/multimodal
 """
 import os
+import base64
 import requests
 
 BASE = "https://openrouter.ai/api/v1"
@@ -82,7 +83,34 @@ def chat(messages, model=None, temperature=0.7, max_tokens=None, key=None, **kw)
     return d["choices"][0]["message"]["content"]
 
 
+def generate_image(prompt, model=None, out_path=None, aspect_ratio=None, key=None, **kw):
+    """Generate an image via the Unified Image API (POST /images). Returns raw PNG
+    bytes, or writes to out_path and returns it. `aspect_ratio` e.g. "1:1","9:16"."""
+    body = {"model": model or MODELS["image"], "prompt": prompt}
+    if aspect_ratio:
+        body["aspect_ratio"] = aspect_ratio
+    body.update(kw)
+    r = requests.post(f"{BASE}/images", headers=_headers(key), json=body, timeout=240)
+    if r.status_code == 429:
+        raise OpenRouterError(f"OpenRouter rate limited (retry after {r.headers.get('Retry-After','?')}s).")
+    try:
+        d = r.json()
+    except ValueError:
+        raise OpenRouterError(f"Non-JSON from OpenRouter images ({r.status_code}): {r.text[:200]}")
+    if d.get("error"):
+        raise OpenRouterError(str(d["error"]))
+    r.raise_for_status()
+    data = d.get("data") or []
+    if not data or not data[0].get("b64_json"):
+        raise OpenRouterError(f"No image returned: {str(d)[:200]}")
+    raw = base64.b64decode(data[0]["b64_json"])
+    if out_path:
+        with open(out_path, "wb") as f:
+            f.write(raw)
+        return out_path
+    return raw
+
+
 # --- Phase 1 (asset stages) — dedicated endpoints, wired when built ---
-# generate_image(prompt, ...)  -> POST {BASE}/images (Unified Image API)
 # generate_video(prompt, ...)  -> POST {BASE}/videos (async; poll for the result)
 # tts(text, voice, ...)        -> POST {BASE}/audio/speech (OpenAI-compatible bytes)
