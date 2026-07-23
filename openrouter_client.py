@@ -18,9 +18,9 @@ MODELS = {
     "polish":    "anthropic/claude-sonnet-5",      # hook + final script polish
     "factcheck": "anthropic/claude-sonnet-5",      # claim verification
     "image":     "google/gemini-3.1-flash-image",  # slides / figures / visuals
-    # video + tts are set in Phase 1 against the dedicated endpoints:
-    "video":     "kwaivgi/kling-v3.0-std",         # 9:16 b-roll (video endpoint) — confirm slug at build
-    "tts":       "openai/tts-1",                    # narration (/audio/speech) — confirm at build
+    "tts":       "google/gemini-3.1-flash-tts-preview",  # narration (/audio/speech, PCM 24kHz)
+    # video set against the dedicated /videos endpoint in the render stage:
+    "video":     "kwaivgi/kling-v3.0-std",         # 9:16 b-roll — confirm slug at build
 }
 
 
@@ -111,6 +111,30 @@ def generate_image(prompt, model=None, out_path=None, aspect_ratio=None, key=Non
     return raw
 
 
-# --- Phase 1 (asset stages) — dedicated endpoints, wired when built ---
+def tts(text, voice="Puck", model=None, out_path=None, response_format="pcm",
+        instructions=None, key=None):
+    """Text-to-speech via /audio/speech. Default (Gemini TTS) returns raw 24kHz
+    16-bit mono PCM bytes; the narration stage wraps it to WAV. Voice is the A/B
+    knob (Gemini voices: Puck, Kore, Fenrir, Charon, …). Returns bytes or out_path."""
+    body = {"model": model or MODELS["tts"], "input": text, "voice": voice,
+            "response_format": response_format}
+    if instructions:
+        body["instructions"] = instructions
+    r = requests.post(f"{BASE}/audio/speech", headers=_headers(key), json=body, timeout=240)
+    if r.status_code == 429:
+        raise OpenRouterError(f"OpenRouter rate limited (retry after {r.headers.get('Retry-After','?')}s).")
+    if r.status_code >= 400:
+        try:
+            raise OpenRouterError(str(r.json().get("error", r.text[:200])))
+        except ValueError:
+            raise OpenRouterError(f"TTS {r.status_code}: {r.text[:200]}")
+    raw = r.content
+    if out_path:
+        with open(out_path, "wb") as f:
+            f.write(raw)
+        return out_path
+    return raw
+
+
+# --- render stage: video b-roll — dedicated async endpoint, wired at build ---
 # generate_video(prompt, ...)  -> POST {BASE}/videos (async; poll for the result)
-# tts(text, voice, ...)        -> POST {BASE}/audio/speech (OpenAI-compatible bytes)
