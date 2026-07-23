@@ -69,24 +69,80 @@ const Field: React.FC<{ theme: ExplainerTheme; children: React.ReactNode }> = ({
   );
 };
 
-/** A user-supplied SVG file, animated generically. */
-const LoadedSvg: React.FC<{ src: string }> = ({ src }) => {
-  const e = useSpringIn();
+// Per-concept motion flavor for a loaded (flat) SVG — chosen by the matched
+// concept so each icon moves in a way that suits it, not one uniform bob.
+const SPIN = new Set(["globe", "world", "network"]); // slow continuous rotation
+const PENDULUM = new Set(["scale", "balance"]); // rocks like a balance/see-saw
+const BOB = new Set(["rocket", "launch"]); // rises + slight tilt
+const PULSE = new Set(["eye", "brain", "chip", "server", "warning"]); // heartbeat scale
+
+/** A user-supplied (flat) SVG file, richly animated so it clearly reads as motion:
+ * a scan-in reveal wipe, an accent glow that breathes, a VHS light-bar sweeping
+ * across it, and a per-concept motion (spin / pendulum / bob / pulse / float). */
+const LoadedSvg: React.FC<{ src: string; concept?: string; accent: string }> = ({
+  src,
+  concept,
+  accent,
+}) => {
   const frame = useCurrentFrame();
-  const float = Math.sin(frame / 24) * 12;
+  const e = useSpringIn();
+  const reveal = e; // 0..1 scan-in wipe (top -> bottom)
+  const enterScale = interpolate(e, [0, 1], [0.62, 1]);
+
+  // Base life every icon gets.
+  const floatY = Math.sin(frame / 24) * 9;
+  const breathe = 1 + 0.03 * Math.sin(frame / 18);
+  const glow = 6 + 12 * (0.5 + 0.5 * Math.sin(frame / 11));
+
+  // Per-concept flavor on top of the base.
+  let rot = 0;
+  let extraY = 0;
+  let pulse = 1;
+  if (concept && SPIN.has(concept)) rot = (frame * 0.5) % 360;
+  else if (concept && PENDULUM.has(concept)) rot = 7 * Math.sin(frame / 20);
+  else if (concept && BOB.has(concept)) {
+    extraY = -Math.abs(Math.sin(frame / 16)) * 14;
+    rot = 3 * Math.sin(frame / 16);
+  } else if (concept && PULSE.has(concept)) pulse = 1 + 0.06 * Math.sin(frame / 10);
+
   return (
     <div
       style={{
         width: "72%",
         height: "72%",
-        transform: `translateY(${float}px) scale(${interpolate(e, [0, 1], [0.6, 1])})`,
+        position: "relative",
+        transform: `translateY(${floatY + extraY}px)`,
         opacity: e,
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
       }}
     >
-      <Img src={src} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          transform: `scale(${enterScale * breathe * pulse}) rotate(${rot}deg)`,
+          clipPath: `inset(${(1 - reveal) * 100}% 0 0 0)`,
+          filter: `drop-shadow(0 0 ${glow}px ${accent})`,
+        }}
+      >
+        <Img src={src} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+      </div>
+      {/* VHS light-bar sweeping down the graphic. */}
+      <div
+        style={{
+          position: "absolute",
+          left: "6%",
+          right: "6%",
+          height: "18%",
+          top: `${((frame * 2) % 150) - 25}%`,
+          background: `linear-gradient(${accent}00, ${accent}66, ${accent}00)`,
+          mixBlendMode: "screen",
+          opacity: 0.45,
+          pointerEvents: "none",
+        }}
+      />
     </div>
   );
 };
@@ -356,7 +412,11 @@ export const SvgScene: React.FC<Props> = ({ scene, theme }) => {
   return (
     <Field theme={theme}>
       {scene.svgUrl ? (
-        <LoadedSvg src={scene.svgUrl} />
+        <LoadedSvg
+          src={scene.svgUrl}
+          concept={scene.svgKind}
+          accent={accentOf(theme, scene.role)}
+        />
       ) : Builtin ? (
         <Builtin scene={scene} theme={theme} />
       ) : null}

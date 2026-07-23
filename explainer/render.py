@@ -105,18 +105,23 @@ def build_scene_list(alignment, assets=None):
                 # plain b-roll accents stay ducked/muted under the narration.
                 scene["duckAudio"] = not shot.get("speaks")
             if not has_media:
-                # No footage — keep the type (figure -> big stat, else animated
-                # backdrop); the captions carry the spoken words, not a headline.
-                scene["text"] = _headline(shot)
+                # No footage — an animated SVG graphic if one was assigned (figures
+                # get them too now), else the animated backdrop. NO on-screen text:
+                # the captions are the only words (no big-stat/headline slide).
+                if a.get("svgUrl"):
+                    scene["svgUrl"] = a["svgUrl"]
+                if a.get("svgKind"):
+                    scene["svgKind"] = a["svgKind"]
             # Speech-aligned, variable cut lengths for a montage (>1 clip/still).
             if len(scene.get("videos") or []) > 1 or len(scene.get("images") or []) > 1:
                 scene["beats"] = _beats_for(scene["startMs"], scene["endMs"], words)
         else:
-            scene["text"] = _headline(shot)
-            # Text beats can carry an animated SVG graphic (user file or built-in).
+            # Text beat: an animated SVG graphic (user file or built-in), no text.
+            # svgKind rides along even with svgUrl so the loaded SVG animates in a
+            # concept-appropriate way (spin/pendulum/bob/pulse).
             if a.get("svgUrl"):
                 scene["svgUrl"] = a["svgUrl"]
-            elif a.get("svgKind"):
+            if a.get("svgKind"):
                 scene["svgKind"] = a["svgKind"]
         scenes.append(scene)
     return scenes

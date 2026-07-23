@@ -334,9 +334,9 @@ export const SceneRenderer: React.FC<SceneProps> = ({ scene, theme }) => {
   if (vids.length) return <StockVideo videos={vids} beats={scene.beats} />;
   const imgs = sceneImages(scene);
   if (imgs.length) return <ImageScene images={imgs} beats={scene.beats} />;
-  if (scene.type === "figure" && (scene.text ?? "").trim())
-    return <StatScene scene={scene} theme={theme} />;
-  // Text beat: an animated SVG graphic if one was assigned, else the backdrop.
+  // No on-screen headline/stat text anywhere — the yellow captions are the ONLY
+  // text. A text/figure beat shows an animated SVG graphic if one was assigned,
+  // else the animated brand backdrop.
   if (hasSvg(scene)) return <SvgScene scene={scene} theme={theme} />;
   return <AnimatedBackdrop theme={theme} role={scene.role} />;
 };

@@ -17,7 +17,14 @@ import glob
 import shutil
 
 SVG_DIR = os.environ.get("EXPLAINER_SVG_DIR", os.path.join("assets", "svg"))
-_TEXT_SHOTS = {"slide", "motion_text"}
+# Shots eligible for an SVG graphic when they have no other media. Figures without
+# a fetched still get one too (a concept animation reads better than an empty slide).
+_SVG_SHOTS = {"slide", "motion_text", "figure"}
+
+# Concepts where the animated BUILT-IN graphic beats the user's flat file — e.g. the
+# supplied clock.svg is sparse (missing hour marks); the built-in ClockGraphic draws
+# all 12 ticks and sweeps its hands. Keep the file on disk; just never match it.
+PREFER_BUILTIN = {"clock"}
 
 # Canonical concept -> the many words (synonyms) that should select it. Shared by
 # the built-in graphics AND user files (a user's warning.svg matches "danger",
@@ -116,8 +123,9 @@ def match(shot, files=None):
     user files beat built-ins on ties."""
     words = set(_keywords(shot.get("visual_note") or shot.get("narration") or ""))
     files = library() if files is None else files
-    # available concept -> (is_file, source_tuple)
-    avail = {c: (True, ("file", p)) for c, p in files.items()}
+    # available concept -> (is_file, source_tuple). Skip user files for concepts we
+    # deliberately serve from the built-in graphic (PREFER_BUILTIN).
+    avail = {c: (True, ("file", p)) for c, p in files.items() if c not in PREFER_BUILTIN}
     for c in BUILTIN:
         avail.setdefault(c, (False, ("kind", c)))
 
@@ -140,7 +148,7 @@ def gather_svgs(shots, out_dir, shot_assets):
     job_id = os.path.basename(out_dir)
     n = 0
     for i, shot in enumerate(shots):
-        if shot.get("visual") not in _TEXT_SHOTS:
+        if shot.get("visual") not in _SVG_SHOTS:
             continue
         e = merged.get(i, {})
         if any(e.get(k) for k in ("videos", "videoUrl", "images", "svgUrl", "svgKind")):
@@ -149,11 +157,14 @@ def gather_svgs(shots, out_dir, shot_assets):
         if not m:
             continue
         kind, val = m
+        entry = merged.setdefault(i, {})
         if kind == "file":
             dst = os.path.join(out_dir, f"svg_{i}.svg")
             shutil.copyfile(val, dst)
-            merged.setdefault(i, {})["svgUrl"] = f"/output/{job_id}/svg_{i}.svg"
+            entry["svgUrl"] = f"/output/{job_id}/svg_{i}.svg"
+            # Concept rides along so the composition animates it appropriately.
+            entry["svgKind"] = _file_concept(val)
         else:
-            merged.setdefault(i, {})["svgKind"] = val
+            entry["svgKind"] = val
         n += 1
     return merged, n

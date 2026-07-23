@@ -193,11 +193,11 @@ def cmd_assets(args):
         # 1c) Animated SVG graphics for text beats (user folder or built-in).
         if not args.no_svg:
             from explainer.assets import svg as svgmod
-            n_text = sum(1 for sh in shots if sh.get("visual") in svgmod._TEXT_SHOTS)
+            n_text = sum(1 for sh in shots if sh.get("visual") in svgmod._SVG_SHOTS)
             if n_text:
                 sa, got = svgmod.gather_svgs(shots, proj_dir, sa)
                 if got:
-                    print(f"svg graphics: {got}/{n_text} text beat(s)")
+                    print(f"svg graphics: {got}/{n_text} eligible beat(s)")
         manifest["shot_assets"] = {str(k): v for k, v in sa.items()}
 
         # 2) Narration. Soundbite shorts assemble a mixed timeline (Orus + silence
