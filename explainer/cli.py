@@ -140,16 +140,29 @@ def cmd_assets(args):
 
         manifest = {"music": None, "shot_assets": {}, "clip_flags": [], "narration_seconds": secs}
 
-        # 2) Accent clips + fair-use guardrails + provenance
-        if not args.no_clips and any(x.get("type") == "youtube" for x in sources):
+        # 2) Accent clips + fair-use guardrails + provenance. Prefer a clip-finder
+        #    plan (transcript-selected windows tied to shots); else fall back to the
+        #    topic's manual in/out timestamps.
+        if not args.no_clips:
             from explainer.assets import clips as clp
-            print("fetching accent clips …", flush=True)
-            res = clp.gather_accent_clips(s, args.project_id, sources, proj_dir, narration_seconds=secs)
-            manifest["clip_flags"] = res["flags"]
-            job_id = rnd.job_id_for(args.project_id)
-            sa = rnd.shot_assets_from_clips(script.get("shots", []), res["clips"], job_id)
+            plan_path = os.path.join(proj_dir, "clips_plan.json")
+            sa = {}
+            if os.path.isfile(plan_path):
+                with open(plan_path, encoding="utf-8") as pf:
+                    sels = (json.load(pf) or {}).get("selections", [])
+                if sels:
+                    print(f"fetching {len(sels)} clip-finder window(s) …", flush=True)
+                    res = clp.gather_from_plan(s, args.project_id, sels, proj_dir, narration_seconds=secs)
+                    sa = res["shot_assets"]
+                    manifest["clip_flags"] = res["flags"]
+            elif any(x.get("type") == "youtube" for x in sources):
+                print("fetching accent clips (manual timestamps) …", flush=True)
+                res = clp.gather_accent_clips(s, args.project_id, sources, proj_dir, narration_seconds=secs)
+                manifest["clip_flags"] = res["flags"]
+                job_id = rnd.job_id_for(args.project_id)
+                sa = rnd.shot_assets_from_clips(script.get("shots", []), res["clips"], job_id)
             manifest["shot_assets"] = {str(k): v for k, v in sa.items()}
-            for f in res["flags"]:
+            for f in manifest["clip_flags"]:
                 mark = "⛔" if f["level"] == "block" else "⚠️"
                 print(f"  {mark} {f['code']}: {f['message']}")
 
@@ -194,6 +207,40 @@ def cmd_align(args):
         al.write_alignment(alignment, out)
         print(f"aligned {len(alignment['words'])} words, {len(alignment['shots'])} shots "
               f"({alignment['duration_ms']/1000:.1f}s) → {out}")
+
+
+def cmd_clipfind(args):
+    """Read the reference videos' transcripts and pick the best accent-clip window
+    for each accent_clip shot; write an inspectable clips_plan.json."""
+    store.init_db()
+    from explainer import clipfinder as cf
+    proj_dir = _proj_dir(args.project_id)
+    with store.session() as s:
+        draft = _latest_draft(s, args.project_id)
+        if not draft:
+            print(f"no draft for project #{args.project_id}")
+            return
+        topic = s.get(store.Topic, s.get(store.Project, args.project_id).topic_id)
+        sources = (topic.sources if topic else None) or []
+        script = draft.script or {}
+    refs = [x for x in sources if x.get("type") == "youtube"]
+    if not refs:
+        print("no YouTube reference sources on this topic")
+        return
+    print(f"reading {len(refs)} reference transcript(s) + selecting windows …", flush=True)
+    result = cf.plan(script, sources, proj_dir, model=(args.model or None))
+    with open(os.path.join(proj_dir, "clips_plan.json"), "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+    print("\nreferences:")
+    for r in result["references"]:
+        print(f"  {r['channel']} — {r['title'][:60]} ({int(r['duration'])}s, {r['segments']} segs)")
+    print(f"\n{len(result['selections'])} clip(s) selected for {result['needs']} accent shot(s):")
+    for sel in result["selections"]:
+        dur = sel["out"] - sel["in"]
+        print(f"  shot {sel['shot_index']} ← {sel['channel']}  {sel['in']:.0f}–{sel['out']:.0f}s ({dur:.0f}s)")
+        print(f"     “{sel['quote']}”")
+        print(f"     ↳ {sel['why']}")
+    print(f"\nplan → {proj_dir}/clips_plan.json  (assets will fetch these; edit to curate)")
 
 
 def cmd_factcheck(args):
@@ -354,6 +401,11 @@ def main():
     fp.add_argument("--source-file", default="", help="path to source text to verify against")
     fp.add_argument("--model", default="", help="override the OpenRouter model")
     fp.set_defaults(func=cmd_factcheck)
+
+    cfp = sub.add_parser("clipfind", help="pick accent-clip windows from reference transcripts")
+    cfp.add_argument("--project-id", type=int, required=True)
+    cfp.add_argument("--model", default="", help="override the OpenRouter model")
+    cfp.set_defaults(func=cmd_clipfind)
 
     lp = sub.add_parser("align", help="word-timestamp the narration -> align.json")
     lp.add_argument("--project-id", type=int, required=True)

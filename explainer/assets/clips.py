@@ -84,6 +84,40 @@ def log_provenance(session, project_id, url, start_s, end_s, local_path, channel
     return row
 
 
+def gather_from_plan(session, project_id, selections, out_dir, narration_seconds=None):
+    """Fetch the clip-finder's selected windows (each already tied to a shot_index),
+    guardrail-check, and log provenance. `selections`: [{shot_index, url, in, out,
+    channel, ...}] from `clipfinder.plan`.
+
+    Returns {"shot_assets": {shot_index: {videoUrl[, attribution]}}, "flags": [...]}
+    — shot_assets keyed by the exact shot the window was chosen for (no order guess)."""
+    from explainer.render import job_id_for
+    job_id = job_id_for(project_id)
+    records, prefetch_flags, shot_assets = [], [], {}
+    for k, sel in enumerate(selections or []):
+        start_s, end_s = float(sel.get("in", 0)), float(sel.get("out", 0))
+        out_path = os.path.join(out_dir, f"clip{k}.mp4")
+        rec = {"index": sel.get("shot_index"), "start_s": start_s, "end_s": end_s}
+        records.append(rec)
+        try:
+            fetch_clip(sel.get("url", ""), start_s, end_s, out_path)
+            log_provenance(session, project_id, sel.get("url", ""), start_s, end_s,
+                           out_path, sel.get("channel") or "")
+            entry = {"videoUrl": f"/output/{job_id}/{os.path.basename(out_path)}"}
+            if sel.get("channel"):
+                entry["attribution"] = f"via {sel['channel']}"
+            shot_assets[int(sel["shot_index"])] = entry
+        except Exception as e:  # noqa: BLE001 — surface as a fixable flag, don't abort
+            prefetch_flags.append({"level": "block", "code": "fetch_failed",
+                                   "clip_index": sel.get("shot_index"),
+                                   "message": f"could not fetch clip for shot {sel.get('shot_index')} ({sel.get('url')}): {e}"})
+
+    flags = check_guardrails(records, narration_seconds) + prefetch_flags
+    order = {"block": 0, "warn": 1}
+    return {"shot_assets": shot_assets,
+            "flags": sorted(flags, key=lambda f: order.get(f["level"], 9))}
+
+
 def gather_accent_clips(session, project_id, sources, out_dir, narration_seconds=None):
     """Fetch every YouTube accent source for a project, trim, guardrail-check, and
     log provenance. `sources`: the topic's source list [{type, url, in, out, ...}].
