@@ -159,9 +159,13 @@ Return ONLY valid JSON (no markdown):
 
 
 def _needs(script):
+    """Shots that need a reference-speaker window: every accent_clip (we show them
+    talk) AND every speaks:true `aid` (we hear them over the explanatory animation)."""
     out = []
     for i, shot in enumerate(script.get("shots") or []):
-        if shot.get("visual") == "accent_clip":
+        wants_clip = shot.get("visual") == "accent_clip" or (
+            shot.get("visual") == "aid" and shot.get("speaks"))
+        if wants_clip:
             out.append({"shot_index": i, "role": shot.get("role"),
                         "narration": shot.get("narration"),
                         "visual_note": shot.get("visual_note")})

@@ -20,43 +20,57 @@ Shorts channel. Write a 30-45 second vertical Short in a HYPE HOT-TAKE voice:
   so the visual cuts constantly. One idea per shot. Never let a beat run long.
 - Arc: hook -> escalate the stakes -> the thing -> why it matters -> button (a
   memorable close / mic-drop). Keep momentum; every line earns the next.
-- ~30-45s TOTAL. Narration reads ~2.3 words/sec. CRITICAL: a speaks:true soundbite
-  eats 8-14s of runtime with ZERO narrator words — so BUDGET FOR IT. With one ~12s
-  soundbite, keep narrated words to ~65-80 total (not 115); without soundbites,
-  ~80-100. Overwriting blows past 45s — be lean, cut every non-essential word.
+- LENGTH & BALANCE. Narration reads ~2.3 words/sec. If the topic has a talking-head
+  source (interview/talk/podcast), this is a SOUNDBITE-LED piece: the real speaker's
+  OWN voice must carry MORE of the runtime than the AI narrator. Target 45-60s with
+  3-4 speaks:true soundbites (~28-40s of the speaker) + a punchy narrator hook and
+  SHORT connective bridges only — keep narrator words to ~45-60 total. The narrator
+  sets up and stitches; the SUBJECT delivers the substance in their own voice.
+  Without talking-head sources, 30-45s and ~80-100 narrator words. Be lean either way.
 - Concrete and punchy. No "in this video", no filler, no hedging padding.
 - Any shot that states a fact carries a "source" pointer (the source label). Use
   null for pure framing/opinion lines.
 - Pick a "visual" per shot. CRITICAL — match the type to where the footage comes from:
   * accent_clip = the SPECIFIC reference speaker's own footage (e.g. Hinton from the
-    pasted videos). Use it for the hook (their face while you narrate) and for every
-    speaks:true soundbite. A NAMED person or a specific show ONLY ever goes here.
-  * broll = a REAL, FILMABLE stock scene (we pull real camera footage — NOT AI, NOT
-    abstract renders). visual_note MUST be a concrete real-world thing a camera can
-    shoot: "data center server racks", "person typing on a laptop at night", "city
-    skyline at dusk", "scientist in a lab", "crowd walking in a city", "circuit board
-    close-up", "empty office at night", "hands on a keyboard". NEVER abstract renders
-    ("glowing neural network", "digital brain", "flowing data streams" — those only
-    exist as AI/animation) and NEVER a named person / specific show.
+    pasted videos). Use it for the hook (their face while you narrate) and for
+    speaks:true soundbites where we SEE them talk. A NAMED person or specific show
+    ONLY ever goes here.
+  * aid = a GENERATED, animated VISUAL AID (we make it with a video model) that
+    VISUALLY EXPLAINS the current point — a concept made visible, a metaphor in
+    motion. It must TEACH the idea, not just decorate. Examples: "a human silhouette
+    beside an AI silhouette that keeps growing taller, surpassing the human — showing
+    AI overtaking human intelligence"; "one glowing node multiplying into a dense
+    network — showing capability compounding"; "two curves on a graph, the AI curve
+    bending sharply upward past the human line". visual_note = describe the animation
+    AND the single idea it makes the viewer understand. Abstract/conceptual is GOOD
+    here (this is the channel's primary explanatory visual now). PREFER `aid` over a
+    plain text beat whenever a point can be shown.
+  * broll = a REAL, FILMABLE stock scene, ONLY for a literal real-world thing a camera
+    shoots (e.g. "data center server racks", "hands on a keyboard"). Use sparingly; if
+    the point is a concept, use `aid` instead. NEVER a named person / specific show.
   * figure = a striking NUMBER shown huge (percent, year, count, money) — e.g. 20%,
-    2023, 100 TRILLION. Use it only for a real number; NOT for label phrases (those
-    are just narration — the captions already show the words).
-  * motion_text / slide = a text beat with NO footage. Do NOT write a headline here —
-    the on-screen yellow captions already say the narration, so a second title would
-    fight them. These render as an animated brand backdrop; the captions carry it.
-  visual_note is the direction; for broll keep it to plain stock keywords.
+    2023, 100 TRILLION. Use it only for a real number; NOT for label phrases.
+  * motion_text / slide = a text-only beat with NO footage (animated brand backdrop).
+    Use RARELY — prefer an `aid` that shows the idea. Do NOT write a headline; the
+    yellow captions already carry the words.
+  visual_note is the direction; for `aid` describe the explanatory animation, for
+  broll keep it to plain real-stock keywords.
 - "on_screen" is the ACTUAL big text to burn on screen for slide/motion_text shots:
   a punchy 2-5 word distillation of the line. NOT a stage direction, NOT quotes,
   NOT "text:"/"split screen:" prefixes. For a figure shot, on_screen is the EXACT
   number to show huge (e.g. "20%", "2023", "100 TRILLION"). Null for everything else
   (slide/motion_text/accent_clip/broll) — captions carry those words.
-- SOUNDBITES: when a source is an interview/talk/podcast, make 1-3 accent_clip shots
-  a "speaks":true soundbite — the person's OWN words carry that beat, so its
-  "narration" MUST be "" (the narrator does NOT talk over it). Structure the piece so
-  the narrator sets up in one shot, then a speaks:true accent_clip lands the punch in
-  the subject's voice, then the narrator bridges to the next. A speaks:true shot
-  should run ~8-14s. Other accent_clip shots (speaks:false) are silent b-roll the
-  narrator talks over. If there are no talking-head sources, use no soundbites.
+- SOUNDBITES (the backbone of a soundbite-led piece): make 3-4 speaks:true shots
+  where the reference speaker's OWN words carry the beat — "narration" MUST be "" and
+  the narrator does NOT talk over it. A speaks:true shot runs ~8-14s. Two flavors:
+  * speaks:true + visual "accent_clip" = we SEE the speaker say it (their face).
+  * speaks:true + visual "aid" = we HEAR the speaker while an explanatory `aid`
+    animation shows WHAT they're describing (their voice narrates the visual aid).
+    Use this to illustrate a claim as they make it — powerful and on-brand.
+  Structure: narrator hook -> speaker soundbite (their face) -> narrator one-line
+  bridge -> speaker soundbite over an `aid` -> ... The subject's voice should be the
+  spine; the narrator is the connective tissue. If there are no talking-head sources,
+  use no soundbites.
 
 Return ONLY valid JSON (no markdown, no prose) matching exactly:
 {
@@ -64,7 +78,7 @@ Return ONLY valid JSON (no markdown, no prose) matching exactly:
   "hook": "<the opening spoken line>",
   "shots": [
     {"role":"hook|setup|thing|why|button","narration":"<spoken line, or \\"\\" if speaks:true>",
-     "visual":"slide|motion_text|figure|accent_clip|broll","visual_note":"<direction>",
+     "visual":"slide|motion_text|figure|accent_clip|aid|broll","visual_note":"<direction>",
      "on_screen":"<2-5 word on-screen headline, or null>","speaks":<true|false>,
      "source":"<source label or null>","seconds":<int>}
   ],
