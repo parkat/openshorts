@@ -189,14 +189,14 @@ def select_windows(needs, references, model=None, key=None):
     user = (f"SHOTS THAT NEED AN ACCENT CLIP:\n{_needs_text(needs)}\n\n"
             f"REFERENCE TRANSCRIPTS:\n{_render_refs(references)}\n\n"
             "Choose the windows now. JSON only.")
-    # Use the fast draft model, not the reasoning "polish" one: extended thinking
-    # eats the token budget and returns null content on multi-need prompts. Retry
-    # once on an empty response before giving up.
+    # The reasoning "polish" model gives the best picks but its extended thinking
+    # can eat a small token budget and return null content on multi-need prompts —
+    # so give it plenty of room, and fall back to the fast draft model if it still
+    # comes back empty.
     msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
     out = ""
-    for _ in range(2):
-        out = (orc.chat(msgs, model=model or orc.MODELS["draft"], temperature=0.2,
-                        max_tokens=3000, key=key) or "").strip()
+    for m in ([model] if model else [orc.MODELS["polish"], orc.MODELS["draft"]]):
+        out = (orc.chat(msgs, model=m, temperature=0.2, max_tokens=8000, key=key) or "").strip()
         if out:
             break
     if not out:
