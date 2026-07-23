@@ -189,11 +189,16 @@ def select_windows(needs, references, model=None, key=None):
     user = (f"SHOTS THAT NEED AN ACCENT CLIP:\n{_needs_text(needs)}\n\n"
             f"REFERENCE TRANSCRIPTS:\n{_render_refs(references)}\n\n"
             "Choose the windows now. JSON only.")
-    out = orc.chat([{"role": "system", "content": SYSTEM},
-                    {"role": "user", "content": user}],
-                   model=model or orc.MODELS["polish"], temperature=0.2,
-                   max_tokens=3000, key=key)
-    out = (out or "").strip()
+    # Use the fast draft model, not the reasoning "polish" one: extended thinking
+    # eats the token budget and returns null content on multi-need prompts. Retry
+    # once on an empty response before giving up.
+    msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
+    out = ""
+    for _ in range(2):
+        out = (orc.chat(msgs, model=model or orc.MODELS["draft"], temperature=0.2,
+                        max_tokens=3000, key=key) or "").strip()
+        if out:
+            break
     if not out:
         raise ValueError("clip selection returned empty (model truncated) — retry")
     if out.startswith("```"):
