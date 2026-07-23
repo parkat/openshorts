@@ -31,10 +31,13 @@ Shorts channel. Write a 30-45 second vertical Short in a HYPE HOT-TAKE voice:
   * accent_clip = the SPECIFIC reference speaker's own footage (e.g. Hinton from the
     pasted videos). Use it for the hook (their face while you narrate) and for every
     speaks:true soundbite. A NAMED person or a specific show ONLY ever goes here.
-  * broll = a GENERIC concept clip a stock library would have. visual_note MUST be a
-    short searchable stock phrase — "server room", "glowing neural network", "city at
-    night timelapse", "person typing code", "circuit board macro". NEVER a named
-    person / specific show here (stock won't have them).
+  * broll = a REAL, FILMABLE stock scene (we pull real camera footage — NOT AI, NOT
+    abstract renders). visual_note MUST be a concrete real-world thing a camera can
+    shoot: "data center server racks", "person typing on a laptop at night", "city
+    skyline at dusk", "scientist in a lab", "crowd walking in a city", "circuit board
+    close-up", "empty office at night", "hands on a keyboard". NEVER abstract renders
+    ("glowing neural network", "digital brain", "flowing data streams" — those only
+    exist as AI/animation) and NEVER a named person / specific show.
   * figure = a data/STAT beat — shown as a big bold number/label on screen (no footage).
   * motion_text / slide = pure kinetic text beats.
   visual_note is the direction; for broll keep it to plain stock keywords.

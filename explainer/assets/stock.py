@@ -28,12 +28,13 @@ def keywords(shot, limit=4):
 
 
 def search(query, key, per_page=20):
-    # video_type=all: both real film AND stock motion-graphics/animation (both are
-    # human-made stock — NOT AI-generated, so no AI label — and the abstract ones
-    # actually illustrate tech concepts like "neural network"). q is URL-encoded by
-    # requests (<=100 chars). safesearch on.
+    # video_type=film = REAL camera footage only. Pixabay's library is now heavily
+    # polluted with AI-generated "animation" clips (bad, dated-looking) — film is the
+    # strongest available filter to keep them out. The cost: abstract concepts don't
+    # exist as real film, so the script must request FILMABLE real-world scenes.
+    # q is URL-encoded by requests (<=100 chars); safesearch on.
     r = requests.get(API, params={"key": key, "q": query[:100], "per_page": per_page,
-                                  "safesearch": "true"}, timeout=30)
+                                  "video_type": "film", "safesearch": "true"}, timeout=30)
     r.raise_for_status()
     return r.json().get("hits", [])
 

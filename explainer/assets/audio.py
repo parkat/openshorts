@@ -30,6 +30,8 @@ DEFAULT_VOICE = BRAND.get("voice", "Orus")
 def trim_silence(pcm, thresh=500, pad_ms=50):
     """Strip leading/trailing near-silence from a PCM segment (keeps a small pad).
     Tightens the gaps between per-shot narration segments so the read doesn't drag."""
+    if len(pcm) & 1:            # drop a stray byte so 16-bit unpacking is aligned
+        pcm = pcm[:-1]
     a = array.array("h")
     a.frombytes(pcm)
     n = len(a)
@@ -75,7 +77,16 @@ def clip_duration_s(path):
 
 
 def _silence(seconds):
-    return b"\x00" * int(max(0.0, seconds) * SAMPLE_RATE * SAMPLE_WIDTH)
+    # Compute whole SAMPLES then * width, so the byte count is ALWAYS even. An odd
+    # silence length shifts every following 16-bit sample by one byte -> the rest of
+    # the track reads as max-volume static (the "blown out after the clip" bug).
+    n_samples = int(max(0.0, seconds) * SAMPLE_RATE)
+    return b"\x00" * (n_samples * SAMPLE_WIDTH)
+
+
+def _even(pcm):
+    """Drop a stray trailing byte so a segment is always 16-bit sample-aligned."""
+    return pcm[:-1] if (len(pcm) & 1) else pcm
 
 
 def _dur_ms(pcm):
@@ -108,6 +119,7 @@ def assemble(shots, soundbite_paths, out_path, voice=DEFAULT_VOICE,
                 continue
             pcm = atempo(trim_silence(tts(styled(text, shot.get("tone", tone)))), speed)
             kind = "narration"
+        pcm = _even(pcm)  # guarantee sample alignment before concatenation
         ms = _dur_ms(pcm)
         timeline.append({"shot_index": i, "start_ms": int(cursor),
                          "end_ms": int(cursor + ms), "kind": kind})
