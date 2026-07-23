@@ -100,7 +100,11 @@ def gather_from_plan(session, project_id, selections, out_dir, narration_seconds
             fetch_clip(sel.get("url", ""), start_s, end_s, out_path)
             log_provenance(session, project_id, sel.get("url", ""), start_s, end_s,
                            out_path, sel.get("channel") or "")
-            entry = {"videoUrl": f"/output/{job_id}/{os.path.basename(out_path)}"}
+            rel = f"/output/{job_id}/{os.path.basename(out_path)}"
+            # speechUrl = the audio source (baked into the master if this shot speaks);
+            # videoUrl = the default visual (his face). An aid shot overrides the visual
+            # with its generated aid clips but still uses speechUrl for the voice.
+            entry = {"videoUrl": rel, "speechUrl": rel}
             if sel.get("channel"):
                 entry["attribution"] = f"via {sel['channel']}"
             shot_assets[int(sel["shot_index"])] = entry

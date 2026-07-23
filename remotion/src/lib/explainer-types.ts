@@ -14,6 +14,7 @@ export type ExplainerSceneType =
   | "motion_text"
   | "figure"
   | "accent_clip"
+  | "aid"
   | "broll";
 
 export interface ExplainerScene {
@@ -69,7 +70,7 @@ export const DEFAULT_THEME: ExplainerTheme = {
 
 // --- Zod (render-service validation) ---
 export const explainerSceneSchema = z.object({
-  type: z.enum(["slide", "motion_text", "figure", "accent_clip", "broll"]),
+  type: z.enum(["slide", "motion_text", "figure", "accent_clip", "aid", "broll"]),
   startMs: z.number().min(0),
   endMs: z.number().min(0),
   role: z.string().optional(),

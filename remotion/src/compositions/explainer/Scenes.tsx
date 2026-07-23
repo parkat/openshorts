@@ -157,6 +157,31 @@ const StockVideo: React.FC<{ videos: string[]; beats?: number[] }> = ({ videos, 
   );
 };
 
+/** Generated explanatory AID clips. A spoken aid rides a ~15s soundbite as a
+ * MONTAGE of staged clips — play them SEQUENTIALLY (each an equal slice) so the
+ * concept progresses (beginning -> developing -> final), not a jittery beat-cycle.
+ * All muted; the audio is the narrator or the speaker's baked soundbite. */
+const AidSequence: React.FC<{ videos: string[] }> = ({ videos }) => {
+  const { durationInFrames } = useVideoConfig();
+  const each = Math.max(1, Math.ceil(durationInFrames / videos.length));
+  let from = 0;
+  return (
+    <AbsoluteFill style={{ backgroundColor: "#000" }}>
+      {videos.map((src, i) => {
+        const el = (
+          <Sequence key={i} from={from} durationInFrames={each} layout="none">
+            <AbsoluteFill>
+              <VideoClip src={src} />
+            </AbsoluteFill>
+          </Sequence>
+        );
+        from += each;
+        return el;
+      })}
+    </AbsoluteFill>
+  );
+};
+
 /** Generated stills, jump-cut between them with Ken Burns + punch each beat. */
 const ImageScene: React.FC<{ images: string[]; beats?: number[] }> = ({ images, beats }) => (
   <AbsoluteFill style={{ backgroundColor: "#000" }}>
@@ -294,7 +319,7 @@ export const AccentClipScene: React.FC<SceneProps> = ({ scene, theme }) => (
     {scene.videoUrl && (
       <OffthreadVideo
         src={scene.videoUrl}
-        muted={scene.duckAudio !== false}
+        muted
         style={{ width: "100%", height: "100%", objectFit: "cover" }}
       />
     )}
@@ -329,6 +354,11 @@ export const SceneRenderer: React.FC<SceneProps> = ({ scene, theme }) => {
     ) : (
       <AnimatedBackdrop theme={theme} role={scene.role} />
     );
+  }
+  // Generated aid animation: staged clips play in sequence (progression), not cycled.
+  if (scene.type === "aid") {
+    const av = sceneVideos(scene);
+    if (av.length) return <AidSequence videos={av} />;
   }
   const vids = sceneVideos(scene);
   if (vids.length) return <StockVideo videos={vids} beats={scene.beats} />;

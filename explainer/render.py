@@ -23,7 +23,8 @@ WIDTH = 1080
 HEIGHT = 1920
 
 # Scene types that want a media asset; without one they fall back to a text slide.
-_MEDIA_SCENES = {"figure", "accent_clip", "broll"}
+# `aid` = a generated explanatory animation (one clip, or a montage for a spoken aid).
+_MEDIA_SCENES = {"figure", "accent_clip", "broll", "aid"}
 
 
 def job_id_for(project_id):

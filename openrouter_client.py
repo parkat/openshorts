@@ -136,5 +136,45 @@ def tts(text, voice="Puck", model=None, out_path=None, response_format="pcm",
     return raw
 
 
-# --- render stage: video b-roll — dedicated async endpoint, wired at build ---
-# generate_video(prompt, ...)  -> POST {BASE}/videos (async; poll for the result)
+# --- video generation: dedicated async /videos endpoint (submit -> poll -> pull) ---
+import time
+
+VIDEO_MODEL = "alibaba/happyhorse-1.1"   # Alibaba HappyHorse 1.1 (720p 3-15s ~$0.099/s)
+
+
+def generate_video(prompt, out_path, model=None, size="720x1280", duration=5,
+                   key=None, poll_interval=15, timeout=900, **kw):
+    """Text->video via the /videos endpoint. Submits the job, polls until it
+    completes, then downloads the mp4 to out_path. Returns {"path", "cost", "id"}.
+
+    `size` is exact WIDTHxHEIGHT (720x1280 = our vertical 9:16); `duration` seconds
+    (HappyHorse supports 3-15). The model has no audio track — the composition mutes
+    all video and drives sound from the narration/soundbite master."""
+    body = {"model": model or VIDEO_MODEL, "prompt": prompt, "size": size,
+            "duration": int(duration)}
+    body.update(kw)
+    r = requests.post(f"{BASE}/videos", headers=_headers(key), json=body, timeout=60)
+    try:
+        job = r.json()
+    except ValueError:
+        raise OpenRouterError(f"Non-JSON from /videos ({r.status_code}): {r.text[:200]}")
+    if job.get("error") or not job.get("id"):
+        raise OpenRouterError(f"video submit failed ({r.status_code}): {str(job)[:200]}")
+    jid = job["id"]
+    poll_url = job.get("polling_url") or f"{BASE}/videos/{jid}"
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(poll_interval)
+        pr = requests.get(poll_url, headers=_headers(key), timeout=30)
+        d = pr.json()
+        status = d.get("status")
+        if status == "completed":
+            url = (d.get("unsigned_urls") or [f"{BASE}/videos/{jid}/content?index=0"])[0]
+            vr = requests.get(url, headers=_headers(key), timeout=180)
+            vr.raise_for_status()
+            with open(out_path, "wb") as f:
+                f.write(vr.content)
+            return {"path": out_path, "cost": (d.get("usage") or {}).get("cost"), "id": jid}
+        if status in ("failed", "cancelled", "expired"):
+            raise OpenRouterError(f"video job {jid} {status}: {str(d)[:200]}")
+    raise OpenRouterError(f"video job {jid} did not finish within {timeout}s")

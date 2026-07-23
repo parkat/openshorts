@@ -190,7 +190,19 @@ def cmd_assets(args):
             else:
                 print("  ⚠️ no PIXABAY key in .env — figure/broll shots fall back to text "
                       "(add PIXABAY, or use --ai-visuals).")
-        # 1c) Animated SVG graphics for text beats (user folder or built-in).
+        # 1c) Generated visual-aid clips (HappyHorse video) for `aid` shots — the
+        #     primary explanatory visual. Idempotent per clip (reuses aid_<i>_*.mp4).
+        n_aid = sum(1 for sh in shots if sh.get("visual") == "aid")
+        if n_aid and not args.no_visuals:
+            from explainer.assets import aid as aidmod
+            made, acost = aidmod.generate_aids(shots, proj_dir,
+                                               key=os.environ.get("OPENROUTER"))
+            if made:
+                print(f"aid clips: generated {made} (${acost:.2f})")
+            sa, wired = aidmod.gather_aids(shots, proj_dir, sa)
+            if wired:
+                print(f"aid graphics: {wired}/{n_aid} aid shot(s) wired")
+        # 1d) Animated SVG graphics for text beats (user folder or built-in).
         if not args.no_svg:
             from explainer.assets import svg as svgmod
             n_text = sum(1 for sh in shots if sh.get("visual") in svgmod._SVG_SHOTS)
@@ -203,11 +215,14 @@ def cmd_assets(args):
         # 2) Narration. Soundbite shorts assemble a mixed timeline (Orus + silence
         #    gaps where the clip speaks); otherwise a single continuous TTS read.
         narration_path = os.path.join(proj_dir, "narration.wav")
-        soundbite_paths = {
-            i: os.path.join(proj_dir, os.path.basename(sa[i]["videoUrl"]))
-            for i, shot in enumerate(shots)
-            if shot.get("speaks") and i in sa
-        }
+        # Soundbite audio source = speechUrl (the reference-speaker clip), which is
+        # baked into the master even when the shot's VISUAL is an aid animation.
+        soundbite_paths = {}
+        for i, shot in enumerate(shots):
+            if shot.get("speaks") and i in sa:
+                ref = sa[i].get("speechUrl") or sa[i].get("videoUrl")
+                if ref:
+                    soundbite_paths[i] = os.path.join(proj_dir, os.path.basename(ref))
         print(f"narrating project #{args.project_id} (voice={voice or 'brand default'}) …", flush=True)
         if soundbite_paths and audio.has_soundbites(shots):
             _, timeline = audio.assemble(shots, soundbite_paths, narration_path,
@@ -273,8 +288,9 @@ def cmd_align(args):
             shots = (draft.script or {}).get("shots", [])
             for i, shot in enumerate(shots):
                 entry = sa.get(str(i)) or {}
-                if shot.get("speaks") and entry.get("videoUrl"):
-                    soundbite_clips[i] = os.path.join(proj_dir, os.path.basename(entry["videoUrl"]))
+                ref = entry.get("speechUrl") or entry.get("videoUrl")
+                if shot.get("speaks") and ref:
+                    soundbite_clips[i] = os.path.join(proj_dir, os.path.basename(ref))
         print(f"aligning project #{args.project_id}{' (soundbite timeline)' if timeline else ''} …", flush=True)
         alignment = al.align(audio, draft.script or {}, timeline=timeline,
                              soundbite_clips=soundbite_clips)

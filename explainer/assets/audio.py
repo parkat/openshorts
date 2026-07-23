@@ -61,7 +61,21 @@ def atempo(pcm, factor):
 
 
 def _is_soundbite(shot):
-    return bool(shot.get("speaks")) and shot.get("visual") == "accent_clip"
+    # A soundbite = the reference speaker's OWN audio carries the beat. His voice is
+    # baked into the master track here, so the beat's VISUAL can be his face
+    # (accent_clip) OR an explanatory aid animation (aid) — either way we hear him.
+    return bool(shot.get("speaks")) and shot.get("visual") in ("accent_clip", "aid")
+
+
+def _clip_pcm(path):
+    """Decode a media file's audio to the master format (24kHz mono s16le) PCM, so a
+    soundbite's real audio can be spliced straight into the narration track (the
+    speaker's voice plays over whatever visual is on screen, all video muted)."""
+    p = subprocess.run(
+        ["ffmpeg", "-i", path, "-vn", "-f", "s16le", "-ar", str(SAMPLE_RATE),
+         "-ac", "1", "pipe:1"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    return _even(p.stdout or b"")
 
 
 def clip_duration_s(path):
@@ -108,10 +122,11 @@ def assemble(shots, soundbite_paths, out_path, voice=DEFAULT_VOICE,
     segments, timeline, cursor = [], [], 0.0
     for i, shot in enumerate(shots):
         if _is_soundbite(shot) and i in soundbite_paths:
-            dur = clip_duration_s(soundbite_paths[i])
-            if dur <= 0:
+            # Bake the speaker's real audio into the master track (not silence) so his
+            # voice plays over the shot's visual — his face OR an aid animation.
+            pcm = _clip_pcm(soundbite_paths[i])
+            if not pcm:
                 continue
-            pcm = _silence(dur)
             kind = "soundbite"
         else:
             text = (shot.get("narration") or "").strip()
