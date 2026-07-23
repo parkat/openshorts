@@ -22,16 +22,17 @@ AID_SHOT = "aid"
 SIZE = "720x1280"          # vertical 9:16 (per parkat)
 DURATION = 4              # <=5s per clip; Veo 3.1 Lite supports 4/6/8 (see openrouter_client)
 
-# Brand style suffix — identical language to the SVG/icon formula so aid clips read
-# as the same channel: flat vector, cream field, ink outlines, muted rainbow, VHS.
+# Brand style suffix — flat 80s educational-science look, muted rainbow. NO baked
+# film grain / VHS noise: Veo renders it poorly and the composition adds the VHS
+# treatment (grain/scanlines/chroma) in post via VhsOverlay, so keep the clip CLEAN.
 STYLE = (
     " Clean FLAT vector shapes with thick dark #2E2A26 outlines, no gradients, on a "
-    "warm cream #F3ECD9 background. 1980s educational-science / retro-TV VHS look: "
-    "soft analog film grain, faint horizontal scanlines, gentle chroma wobble, "
-    "slightly washed-out MUTED rainbow palette (dusty red #C1544A, warm orange "
-    "#D98A45, mustard #E3C05A, teal #5F9E9A, slate blue #5A7BA6, muted purple "
-    "#8A6BA1). Vertical 9:16 framing, steady locked-off camera. Absolutely NO text, "
-    "no numbers, no letters, no logos, no watermark."
+    "warm cream #F3ECD9 background. 1980s educational-science / retro-tech flat "
+    "illustration style — simple, bold, MUTED rainbow palette (dusty red #C1544A, "
+    "warm orange #D98A45, mustard #E3C05A, teal #5F9E9A, slate blue #5A7BA6, muted "
+    "purple #8A6BA1). Crisp, clean, smooth — NO film grain, no noise, no scanlines, "
+    "no VHS artifacts. Vertical 9:16 framing, steady locked-off camera. Absolutely "
+    "NO text, no numbers, no letters, no logos, no watermark."
 )
 
 # Staged hints so a montage of clips reads as one progressing animation.
