@@ -12,11 +12,58 @@ import {
 } from "remotion";
 import type { ExplainerScene, ExplainerTheme } from "../../lib/explainer-types";
 
-// Short-form retention: hard-cut to a new visual roughly this often.
-const BEAT_SEC = 1.8;
+// Short-form retention: hard-cut / punch to a new visual about this often.
+const BEAT_SEC = 1.0;
 
-/** Ken Burns pan/zoom on a still — constant slow motion so nothing sits static.
- * Direction/scale vary by seed so consecutive beats don't move identically. */
+interface SceneProps {
+  scene: ExplainerScene;
+  theme: ExplainerTheme;
+}
+
+function useEntrance(): number {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  return spring({ frame, fps, config: { mass: 0.5, stiffness: 140, damping: 14 } });
+}
+
+function pickAccent(theme: ExplainerTheme, role?: string): string {
+  const order = ["hook", "setup", "thing", "why", "button", "escalate"];
+  const i = role ? order.indexOf(role) : -1;
+  return theme.rainbow[(i >= 0 ? i : 0) % theme.rainbow.length] ?? theme.rainbow[0];
+}
+
+// Hard-cut punch framings so a held clip keeps "cutting" every beat.
+const PUNCHES = [
+  { scale: 1.08, x: 0, y: 0 },
+  { scale: 1.24, x: -6, y: -4 },
+  { scale: 1.14, x: 6, y: 3 },
+  { scale: 1.32, x: 0, y: -6 },
+];
+function punchStyle(beat: number): React.CSSProperties {
+  const p = PUNCHES[beat % PUNCHES.length];
+  return { transform: `scale(${p.scale}) translate(${p.x}%, ${p.y}%)` };
+}
+
+/** Split the current shot into ~BEAT_SEC beats and render each with a hard cut. */
+const Beats: React.FC<{ children: (beat: number, beatFrames: number) => React.ReactNode }> = ({
+  children,
+}) => {
+  const { durationInFrames, fps } = useVideoConfig();
+  const bf = Math.max(1, Math.round(BEAT_SEC * fps));
+  const n = Math.max(1, Math.round(durationInFrames / bf));
+  const each = Math.ceil(durationInFrames / n);
+  return (
+    <>
+      {Array.from({ length: n }).map((_, b) => (
+        <Sequence key={b} from={b * each} durationInFrames={each} layout="none">
+          {children(b, bf)}
+        </Sequence>
+      ))}
+    </>
+  );
+};
+
+/** Ken Burns pan/zoom on a still. */
 const KenBurns: React.FC<{ src: string; seed: number }> = ({ src, seed }) => {
   const frame = useCurrentFrame();
   const { durationInFrames } = useVideoConfig();
@@ -40,289 +87,207 @@ const KenBurns: React.FC<{ src: string; seed: number }> = ({ src, seed }) => {
   );
 };
 
-/** Split a shot's image(s) into ~BEAT_SEC hard-cut beats, cycling the images so a
- * longer shot keeps cutting (jump-cut energy) instead of holding one frame. */
-const ImageBeats: React.FC<{ images: string[]; theme: ExplainerTheme }> = ({
-  images,
-}) => {
-  const { durationInFrames, fps } = useVideoConfig();
-  const beatFrames = Math.max(1, Math.round(BEAT_SEC * fps));
-  const nBeats = Math.max(1, Math.round(durationInFrames / beatFrames));
-  const each = Math.ceil(durationInFrames / nBeats);
-  return (
-    <>
-      {Array.from({ length: nBeats }).map((_, b) => (
-        <Sequence key={b} from={b * each} durationInFrames={each} layout="none">
-          <AbsoluteFill>
-            <KenBurns src={images[b % images.length]} seed={b + 1} />
-          </AbsoluteFill>
-        </Sequence>
-      ))}
-    </>
-  );
-};
-
 function sceneImages(scene: ExplainerScene): string[] {
   if (scene.images && scene.images.length) return scene.images;
   if (scene.imageUrl) return [scene.imageUrl];
   return [];
 }
 
-/**
- * Scene renderers for ExplainerShort. Each takes a scene + theme and fills the
- * frame; the parent <Sequence> handles when it's on screen. Kept data-driven so
- * new shot types slot in without a redeploy.
- */
+/** Real stock video, full-bleed, advancing through the clip with a punch cut each
+ * beat so it never sits static. */
+const StockVideo: React.FC<{ src: string }> = ({ src }) => (
+  <AbsoluteFill style={{ backgroundColor: "#000" }}>
+    <Beats>
+      {(b, bf) => (
+        <AbsoluteFill style={punchStyle(b)}>
+          <OffthreadVideo
+            src={src}
+            muted
+            startFrom={b * bf}
+            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          />
+        </AbsoluteFill>
+      )}
+    </Beats>
+  </AbsoluteFill>
+);
 
-interface SceneProps {
-  scene: ExplainerScene;
-  theme: ExplainerTheme;
-}
+/** Generated stills, jump-cut between them with Ken Burns + punch each beat. */
+const ImageScene: React.FC<{ images: string[] }> = ({ images }) => (
+  <AbsoluteFill style={{ backgroundColor: "#000" }}>
+    <Beats>
+      {(b) => (
+        <AbsoluteFill style={punchStyle(b)}>
+          <KenBurns src={images[b % images.length]} seed={b + 1} />
+        </AbsoluteFill>
+      )}
+    </Beats>
+  </AbsoluteFill>
+);
 
-// A gentle spring the retro scenes share for entrances (0 -> 1 over ~0.4s).
-function useEntrance(): number {
-  const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
-  return spring({ frame, fps, config: { mass: 0.6, stiffness: 120, damping: 16 } });
-}
-
-function pickAccent(theme: ExplainerTheme, role?: string): string {
-  const order = ["hook", "setup", "thing", "why", "button"];
-  const i = role ? order.indexOf(role) : -1;
-  const idx = i >= 0 ? i % theme.rainbow.length : 0;
-  return theme.rainbow[idx] ?? theme.rainbow[0];
-}
-
-/** Full-bleed cover media (figure image / broll / accent video). */
-const CoverMedia: React.FC<{ scene: ExplainerScene; kind: "img" | "video" }> = ({
-  scene,
-  kind,
+/** Animated brand backdrop for text beats — NO headline (the captions ARE the
+ * words, so nothing competes with them). Continuous motion + a focal pulse, base
+ * color alternates by role so consecutive text beats read as distinct cuts. */
+const AnimatedBackdrop: React.FC<{ theme: ExplainerTheme; role?: string }> = ({
+  theme,
+  role,
 }) => {
-  const src = kind === "img" ? scene.imageUrl : scene.videoUrl;
-  if (!src) return null;
-  const style: React.CSSProperties = {
-    width: "100%",
-    height: "100%",
-    objectFit: "cover",
-  };
-  return kind === "img" ? (
-    <Img src={src} style={style} />
-  ) : (
-    <OffthreadVideo src={src} style={style} muted={scene.duckAudio !== false} />
-  );
-};
-
-/** Retro title card: cream field, rainbow rule, big geometric headline. */
-export const SlideScene: React.FC<SceneProps> = ({ scene, theme }) => {
-  const e = useEntrance();
-  const accent = pickAccent(theme, scene.role);
-  const translate = interpolate(e, [0, 1], [40, 0]);
+  const frame = useCurrentFrame();
+  const accent = pickAccent(theme, role);
+  const onAccent = !!role && ["hook", "thing", "why", "escalate"].includes(role);
+  const base = onAccent ? accent : theme.bg;
+  const fg = onAccent ? theme.bg : theme.ink;
   return (
-    <AbsoluteFill
-      style={{
-        backgroundColor: theme.bg,
-        justifyContent: "center",
-        alignItems: "center",
-        padding: "0 90px",
-      }}
-    >
+    <AbsoluteFill style={{ backgroundColor: base, overflow: "hidden" }}>
       <div
         style={{
-          transform: `translateY(${translate}px)`,
-          opacity: e,
-          textAlign: "center",
+          position: "absolute",
+          inset: "-30%",
+          background: `repeating-linear-gradient(120deg, ${theme.rainbow.join(", ")})`,
+          opacity: onAccent ? 0.16 : 0.1,
+          transform: `translateX(${((frame * 1.4) % 260) - 130}px) rotate(6deg)`,
         }}
-      >
+      />
+      {theme.rainbow.map((c, i) => (
+        <div
+          key={i}
+          style={{
+            position: "absolute",
+            width: 210,
+            height: 210,
+            borderRadius: "50%",
+            background: c,
+            opacity: 0.14,
+            mixBlendMode: onAccent ? "screen" : "multiply",
+            left: `${((i * 29 + frame * 0.25) % 130) - 15}%`,
+            top: `${14 + i * 11 + Math.sin(frame / 28 + i) * 5}%`,
+          }}
+        />
+      ))}
+      <AbsoluteFill style={{ justifyContent: "center", alignItems: "center" }}>
+        {[0, 1, 2].map((k) => (
+          <div
+            key={k}
+            style={{
+              position: "absolute",
+              width: 240 + k * 150,
+              height: 240 + k * 150,
+              borderRadius: "50%",
+              border: `10px solid ${fg}`,
+              opacity: 0.12 - k * 0.03,
+              transform: `scale(${0.9 + 0.1 * Math.sin(frame / 18 + k)})`,
+            }}
+          />
+        ))}
         <div
           style={{
             width: 120,
-            height: 12,
-            margin: "0 auto 44px",
-            borderRadius: 6,
-            background: `linear-gradient(90deg, ${theme.rainbow.join(", ")})`,
-          }}
-        />
-        <div
-          style={{
-            fontFamily: theme.displayFont,
-            fontSize: 96,
-            lineHeight: 1.04,
-            fontWeight: 900,
-            letterSpacing: "-0.01em",
-            textTransform: "uppercase",
-            color: theme.ink,
-          }}
-        >
-          {scene.text}
-        </div>
-        <div
-          style={{
-            marginTop: 40,
-            width: 70,
-            height: 70,
-            marginLeft: "auto",
-            marginRight: "auto",
+            height: 120,
             borderRadius: "50%",
             background: accent,
-            opacity: 0.9,
+            border: `8px solid ${fg}`,
+            transform: `scale(${0.9 + 0.13 * Math.sin(frame / 12)})`,
           }}
         />
-      </div>
+      </AbsoluteFill>
     </AbsoluteFill>
   );
 };
 
-/** Kinetic type: words punch up on a solid accent field. */
-export const MotionTextScene: React.FC<SceneProps> = ({ scene, theme }) => {
-  const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
-  const accent = pickAccent(theme, scene.role);
-  const words = (scene.text ?? "").split(/\s+/).filter(Boolean);
-  return (
-    <AbsoluteFill
-      style={{
-        backgroundColor: accent,
-        justifyContent: "center",
-        alignItems: "center",
-        padding: "0 80px",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          justifyContent: "center",
-          gap: "10px 22px",
-          maxWidth: "90%",
-        }}
-      >
-        {words.map((w, i) => {
-          const appear = spring({
-            frame: frame - i * 3,
-            fps,
-            config: { mass: 0.4, stiffness: 220, damping: 14 },
-          });
-          return (
-            <span
-              key={i}
-              style={{
-                fontFamily: theme.displayFont,
-                fontSize: 84,
-                fontWeight: 900,
-                textTransform: "uppercase",
-                color: theme.bg,
-                display: "inline-block",
-                transform: `scale(${interpolate(appear, [0, 1], [0.6, 1])})`,
-                opacity: appear,
-              }}
-            >
-              {w}
-            </span>
-          );
-        })}
-      </div>
-    </AbsoluteFill>
-  );
-};
-
-/** Source figure — stock video or generated stills, matted on the cream field
- * (Ken Burns + jump-cuts for stills). Falls back to a title card with no media. */
-export const FigureScene: React.FC<SceneProps> = ({ scene, theme }) => {
+/** A single big STAT (a number/short label) — a highlight, not prose, so it
+ * reinforces rather than competes with the captions. */
+export const StatScene: React.FC<SceneProps> = ({ scene, theme }) => {
   const e = useEntrance();
-  const images = sceneImages(scene);
-  if (!scene.videoUrl && !images.length)
-    return <SlideScene scene={scene} theme={theme} />;
+  const frame = useCurrentFrame();
+  const text = scene.text ?? "";
+  const size = text.length > 8 ? 96 : text.length > 4 ? 140 : 200;
   return (
     <AbsoluteFill
       style={{
         backgroundColor: theme.bg,
         justifyContent: "center",
         alignItems: "center",
-        padding: 60,
+        overflow: "hidden",
       }}
     >
       <div
         style={{
-          width: "100%",
-          height: "100%",
-          borderRadius: 18,
-          overflow: "hidden",
-          border: `10px solid ${theme.ink}`,
-          transform: `scale(${interpolate(e, [0, 1], [0.94, 1])})`,
+          position: "absolute",
+          width: 560,
+          height: 560,
+          borderRadius: "50%",
+          background: pickAccent(theme, scene.role),
+          opacity: 0.16,
+          transform: `scale(${1 + 0.06 * Math.sin(frame / 15)})`,
+        }}
+      />
+      <div
+        style={{
+          transform: `scale(${interpolate(e, [0, 1], [0.6, 1])})`,
           opacity: e,
-          backgroundColor: "#000",
+          textAlign: "center",
+          padding: "0 60px",
+          fontFamily: theme.displayFont,
+          fontSize: size,
+          fontWeight: 900,
+          letterSpacing: "-0.02em",
+          lineHeight: 1,
+          color: theme.ink,
+          textTransform: "uppercase",
         }}
       >
-        {scene.videoUrl ? (
-          <OffthreadVideo
-            src={scene.videoUrl}
-            muted
-            style={{ width: "100%", height: "100%", objectFit: "cover" }}
-          />
-        ) : (
-          <ImageBeats images={images} theme={theme} />
-        )}
+        {text}
       </div>
     </AbsoluteFill>
   );
 };
 
-/** User-supplied accent clip. Renders "via <source>" while it plays (fair-use §5). */
-export const AccentClipScene: React.FC<SceneProps> = ({ scene, theme }) => {
-  return (
-    <AbsoluteFill style={{ backgroundColor: "#000" }}>
-      <CoverMedia scene={scene} kind="video" />
-      {scene.attribution && (
-        <div
-          style={{
-            position: "absolute",
-            left: 28,
-            top: 36,
-            padding: "8px 16px",
-            borderRadius: 8,
-            backgroundColor: "rgba(46,42,38,0.72)",
-            color: theme.bg,
-            fontFamily: theme.captionFont,
-            fontSize: 30,
-            letterSpacing: "0.02em",
-          }}
-        >
-          {scene.attribution}
-        </div>
-      )}
-    </AbsoluteFill>
-  );
-};
+/** User-supplied accent clip (talking head). Continuous — NOT beat-cut, so the
+ * speaker isn't chopped. Shows "via <source>". */
+export const AccentClipScene: React.FC<SceneProps> = ({ scene, theme }) => (
+  <AbsoluteFill style={{ backgroundColor: "#000" }}>
+    {scene.videoUrl && (
+      <OffthreadVideo
+        src={scene.videoUrl}
+        muted={scene.duckAudio !== false}
+        style={{ width: "100%", height: "100%", objectFit: "cover" }}
+      />
+    )}
+    {scene.attribution && (
+      <div
+        style={{
+          position: "absolute",
+          left: 28,
+          top: 36,
+          padding: "8px 16px",
+          borderRadius: 8,
+          backgroundColor: "rgba(46,42,38,0.72)",
+          color: theme.bg,
+          fontFamily: theme.captionFont,
+          fontSize: 30,
+          letterSpacing: "0.02em",
+        }}
+      >
+        {scene.attribution}
+      </div>
+    )}
+  </AbsoluteFill>
+);
 
-/** B-roll: real video if present, else Ken Burns over generated stills (the
- * cheap default — HANDOFF §11 keeps video spend down). Falls back to a slide. */
-export const BrollScene: React.FC<SceneProps> = ({ scene, theme }) => {
-  if (scene.videoUrl) {
-    return (
-      <AbsoluteFill style={{ backgroundColor: "#000" }}>
-        <CoverMedia scene={scene} kind="video" />
-      </AbsoluteFill>
+/** Dispatch a scene to its renderer. Captions (global layer) always carry the
+ * spoken words; scenes are visuals only (footage, animated backdrop, or a stat). */
+export const SceneRenderer: React.FC<SceneProps> = ({ scene, theme }) => {
+  const imgs = sceneImages(scene);
+  if (scene.type === "accent_clip") {
+    return scene.videoUrl ? (
+      <AccentClipScene scene={scene} theme={theme} />
+    ) : (
+      <AnimatedBackdrop theme={theme} role={scene.role} />
     );
   }
-  const images = sceneImages(scene);
-  if (!images.length) return <SlideScene scene={scene} theme={theme} />;
-  return (
-    <AbsoluteFill style={{ backgroundColor: "#000" }}>
-      <ImageBeats images={images} theme={theme} />
-    </AbsoluteFill>
-  );
-};
-
-const REGISTRY: Record<string, React.FC<SceneProps>> = {
-  slide: SlideScene,
-  motion_text: MotionTextScene,
-  figure: FigureScene,
-  accent_clip: AccentClipScene,
-  broll: BrollScene,
-};
-
-/** Dispatch a scene to its renderer; unknown types fall back to a slide. */
-export const SceneRenderer: React.FC<SceneProps> = ({ scene, theme }) => {
-  const Comp = REGISTRY[scene.type] ?? SlideScene;
-  return <Comp scene={scene} theme={theme} />;
+  if (scene.videoUrl) return <StockVideo src={scene.videoUrl} />;
+  if (imgs.length) return <ImageScene images={imgs} />;
+  if (scene.type === "figure" && (scene.text ?? "").trim())
+    return <StatScene scene={scene} theme={theme} />;
+  return <AnimatedBackdrop theme={theme} role={scene.role} />;
 };

@@ -102,8 +102,8 @@ def build_scene_list(alignment, assets=None):
                 # plain b-roll accents stay ducked/muted under the narration.
                 scene["duckAudio"] = not shot.get("speaks")
             if not has_media:
-                # No footage/stills — show the point as a title card instead.
-                scene["type"] = "slide"
+                # No footage — keep the type (figure -> big stat, else animated
+                # backdrop); the captions carry the spoken words, not a headline.
                 scene["text"] = _headline(shot)
         else:
             scene["text"] = _headline(shot)

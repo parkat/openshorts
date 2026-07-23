@@ -82,13 +82,13 @@ const CaptionBlock: React.FC<{
             key={i}
             style={{
               fontFamily: theme.captionFont,
-              fontSize: 60,
+              fontSize: 68,
               fontWeight: 900,
               textTransform: "uppercase",
               letterSpacing: "0.01em",
               color: i === active ? theme.highlight : "#FFFFFF",
               textShadow: stroke,
-              transform: i === active ? "scale(1.08)" : "none",
+              transform: i === active ? "scale(1.1)" : "none",
               display: "inline-block",
             }}
           >

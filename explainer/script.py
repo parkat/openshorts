@@ -38,14 +38,18 @@ Shorts channel. Write a 30-45 second vertical Short in a HYPE HOT-TAKE voice:
     close-up", "empty office at night", "hands on a keyboard". NEVER abstract renders
     ("glowing neural network", "digital brain", "flowing data streams" — those only
     exist as AI/animation) and NEVER a named person / specific show.
-  * figure = a data/STAT beat — shown as a big bold number/label on screen (no footage).
-  * motion_text / slide = pure kinetic text beats.
+  * figure = a striking NUMBER shown huge (percent, year, count, money) — e.g. 20%,
+    2023, 100 TRILLION. Use it only for a real number; NOT for label phrases (those
+    are just narration — the captions already show the words).
+  * motion_text / slide = a text beat with NO footage. Do NOT write a headline here —
+    the on-screen yellow captions already say the narration, so a second title would
+    fight them. These render as an animated brand backdrop; the captions carry it.
   visual_note is the direction; for broll keep it to plain stock keywords.
 - "on_screen" is the ACTUAL big text to burn on screen for slide/motion_text shots:
   a punchy 2-5 word distillation of the line. NOT a stage direction, NOT quotes,
-  NOT "text:"/"split screen:" prefixes. e.g. narration "bigger models are hitting a
-  wall" -> on_screen "SIZE HIT A WALL". For a figure shot, on_screen is the EXACT
-  stat/label to show big (e.g. "20%", "GODFATHER OF AI"). Null for accent_clip/broll.
+  NOT "text:"/"split screen:" prefixes. For a figure shot, on_screen is the EXACT
+  number to show huge (e.g. "20%", "2023", "100 TRILLION"). Null for everything else
+  (slide/motion_text/accent_clip/broll) — captions carry those words.
 - SOUNDBITES: when a source is an interview/talk/podcast, make 1-3 accent_clip shots
   a "speaks":true soundbite — the person's OWN words carry that beat, so its
   "narration" MUST be "" (the narrator does NOT talk over it). Structure the piece so
