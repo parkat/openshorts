@@ -165,13 +165,33 @@ def _shots_from_timeline(shots, timeline, duration_ms):
     return out
 
 
-def align(audio_path, script, timeline=None):
+def _caption_soundbites(words, timeline, soundbite_clips):
+    """Fill the silent soundbite gaps with the speaker's OWN words: transcribe each
+    soundbite clip and place its words at the segment's offset on the master
+    timeline. Without this, muted viewers get no captions while the clip speaks."""
+    for seg in timeline or []:
+        if seg.get("kind") != "soundbite":
+            continue
+        clip = (soundbite_clips or {}).get(seg["shot_index"])
+        if not clip or not os.path.isfile(clip):
+            continue
+        offset = seg["start_ms"]
+        for w in _flatten_words(subtitles.transcribe_audio(clip)):
+            words.append({"text": w["text"], "startMs": offset + w["startMs"],
+                          "endMs": offset + w["endMs"]})
+    words.sort(key=lambda w: w["startMs"])
+    return words
+
+
+def align(audio_path, script, timeline=None, soundbite_clips=None):
     """Transcribe the narration and map it onto the script's shots.
 
     Returns {"duration_ms", "words", "shots"} — ready for `render.py` to turn into
     a Remotion scene list. When an assembly `timeline` is given (mixed narrator +
     soundbite audio), shot boundaries come from it (authoritative) and whisper is
     used only for caption words; otherwise shots are aligned from the narration text.
+    `soundbite_clips` ({shot_index: clip_path}) adds the speaker's own words as
+    captions during each soundbite gap.
     """
     shots = script.get("shots") or []
     if not shots:
@@ -182,6 +202,7 @@ def align(audio_path, script, timeline=None):
     duration_ms = _audio_duration_ms(audio_path, words)
 
     if timeline:
+        words = _caption_soundbites(words, timeline, soundbite_clips)
         aligned = _shots_from_timeline(shots, timeline, duration_ms)
     else:
         ref = _reference_tokens(shots)

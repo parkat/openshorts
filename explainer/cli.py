@@ -256,8 +256,20 @@ def cmd_align(args):
         if os.path.isfile(tpath):
             with open(tpath, encoding="utf-8") as tf:
                 timeline = json.load(tf)
+        # Map soundbite shots -> their clip files so align can caption the speaker.
+        soundbite_clips = {}
+        apath = os.path.join(proj_dir, "assets.json")
+        if os.path.isfile(apath):
+            with open(apath, encoding="utf-8") as af:
+                sa = (json.load(af) or {}).get("shot_assets", {})
+            shots = (draft.script or {}).get("shots", [])
+            for i, shot in enumerate(shots):
+                entry = sa.get(str(i)) or {}
+                if shot.get("speaks") and entry.get("videoUrl"):
+                    soundbite_clips[i] = os.path.join(proj_dir, os.path.basename(entry["videoUrl"]))
         print(f"aligning project #{args.project_id}{' (soundbite timeline)' if timeline else ''} …", flush=True)
-        alignment = al.align(audio, draft.script or {}, timeline=timeline)
+        alignment = al.align(audio, draft.script or {}, timeline=timeline,
+                             soundbite_clips=soundbite_clips)
         out = os.path.join(_proj_dir(args.project_id), "align.json")
         al.write_alignment(alignment, out)
         print(f"aligned {len(alignment['words'])} words, {len(alignment['shots'])} shots "
