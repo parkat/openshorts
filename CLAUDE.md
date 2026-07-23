@@ -6,6 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 OpenShorts is an AI-powered vertical video generator that transforms long YouTube videos or local uploads into viral-ready short clips (9:16 format) for TikTok, Instagram Reels, and YouTube Shorts. Uses Google Gemini 2.0 Flash for viral moment detection and title generation.
 
+### Current deployment & in-progress work (read `HANDOFF-explainer-pipeline.md`)
+- **Deployed on a GPU box** behind a Cloudflare Tunnel; `openshorts.parkat.us` is gated by **Cloudflare Access**. Frontend is served as a **production build** via `vite preview` (not the dev server) — `docker restart openshorts-frontend` to ship dashboard changes.
+- **Publishing = Buffer** for the main Post flow (`buffer_client.py`, `/api/buffer/*`), with clips hosted publicly for Buffer to fetch via **`media.parkat.us/m/<token>`** (no Access). Upload-Post remains for the Thumbnail/SaaS flows only.
+- **`OPENROUTER`** (one key: LLM/image/video/TTS via `openrouter_client.py`) and **`BUFFER`** live server-side in `openshorts/.env`.
+- **`HANDOFF-explainer-pipeline.md`** (repo root) is the source of truth for the new **Explainer lane** build (SQLite store, `explainer/` package, CLI + dashboard drivers). Read its §0 reconciliation first.
+
 ## Development Commands
 
 ### Local Development (Docker)
