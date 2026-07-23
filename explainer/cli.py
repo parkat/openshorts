@@ -165,9 +165,9 @@ def cmd_assets(args):
         #    gaps where the clip speaks); otherwise a single continuous TTS read.
         narration_path = os.path.join(proj_dir, "narration.wav")
         soundbite_paths = {
-            i: os.path.join(proj_dir, os.path.basename(sa[str(i)]["videoUrl"]))
+            i: os.path.join(proj_dir, os.path.basename(sa[i]["videoUrl"]))
             for i, shot in enumerate(shots)
-            if shot.get("speaks") and str(i) in sa
+            if shot.get("speaks") and i in sa
         }
         print(f"narrating project #{args.project_id} (voice={voice or 'brand default'}) …", flush=True)
         if soundbite_paths and audio.has_soundbites(shots):
