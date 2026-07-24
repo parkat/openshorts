@@ -91,10 +91,12 @@ def _existing(out_dir, i):
     return sorted(glob.glob(os.path.join(out_dir, f"aid_{i}_*.mp4")))
 
 
-def generate_aids(shots, out_dir, key=None, log=print):
+def generate_aids(shots, out_dir, key=None, log=print, style=None):
     """Generate (or reuse) aid clips for every aid shot. Idempotent PER CLIP — an
-    aid_<i>_<j>.mp4 already on disk is left alone. Returns (made, cost_usd)."""
+    aid_<i>_<j>.mp4 already on disk is left alone. `style` overrides the brand art
+    direction (e.g. a mood preset). Returns (made, cost_usd)."""
     os.makedirs(out_dir, exist_ok=True)
+    style = style or STYLE
     made, cost = 0, 0.0
     for i, shot in enumerate(shots):
         if shot.get("visual") != AID_SHOT:
@@ -107,7 +109,7 @@ def generate_aids(shots, out_dir, key=None, log=print):
             if os.path.isfile(out):
                 continue  # already in this project
             stage = f" Show {STAGES[j]}." if n > 1 else ""
-            prompt = note + stage + STYLE
+            prompt = note + stage + style
             rk = cache.ref_for_video(orc.VIDEO_MODEL, prompt, SIZE, DURATION)
             hit = cache.reuse(rk)
             if hit and cache.materialize(hit, out):

@@ -523,14 +523,20 @@ def run_assets(project_id, opts=None, log=print):
         sources = (topic.sources if topic else None) or []
         voice = opts.voice or draft.voice_id or None
 
+        # Mood (draft.script["mood"]) picks the delivery + art direction preset.
+        from explainer.brand import mood as _mood
+        mood_name = script.get("mood")
+        m = _mood(mood_name)
+        if mood_name and mood_name != "default":
+            log(f"  mood: {mood_name}")
         if opts.tone is None:
-            tone = BRAND.get("tts_tone")
+            tone = m.get("tts_tone") or BRAND.get("tts_tone")
         elif str(opts.tone).strip().lower() in ("", "none", "off", "neutral"):
             tone = None
         else:
             tone = opts.tone
         if tone:
-            log(f"  tone: {tone}")
+            log(f"  tone: {tone[:80]}…")
 
         manifest = {"music": None, "shot_assets": {}, "clip_flags": [], "narration_seconds": 0}
 
@@ -578,7 +584,8 @@ def run_assets(project_id, opts=None, log=print):
         n_aid = sum(1 for sh in shots if sh.get("visual") == "aid")
         if n_aid and not opts.no_visuals:
             from explainer.assets import aid as aidmod
-            made, acost = aidmod.generate_aids(shots, pdir, key=os.environ.get("OPENROUTER"))
+            made, acost = aidmod.generate_aids(shots, pdir, key=os.environ.get("OPENROUTER"),
+                                               style=m.get("aid_style"))
             if made:
                 log(f"aid clips: generated {made} (${acost:.2f})")
             sa, wired = aidmod.gather_aids(shots, pdir, sa)
@@ -749,6 +756,15 @@ def run_render(project_id, force=False, no_wait=False, service_url=None, log=pri
             log(f"   {f['code']}: {f['message']}")
         return {"blocked": True, "blocks": blocks}
 
+    # Mood-aware theme (draft.script["mood"] -> dark palette/highlight).
+    theme = None
+    with store.session() as s:
+        d = latest_draft(s, project_id)
+        mood_name = (d.script or {}).get("mood") if d else None
+    if mood_name:
+        theme = rnd.brand_theme(mood_name)
+        log(f"  theme mood: {mood_name}")
+
     narration_url = proj_url(project_id, "narration.wav")
     # Honest narration-dominance signal (§5), from displayed (not fetched) durations.
     scenes = rnd.build_scene_list(alignment, shot_assets)
@@ -761,7 +777,7 @@ def run_render(project_id, force=False, no_wait=False, service_url=None, log=pri
         s.commit()
     log(f"rendering project #{project_id} via {rnd.RENDER_SERVICE_URL} …")
     job = rnd.render(alignment, narration_url, project_id, music_url=music_url,
-                     assets=shot_assets, poll=not no_wait,
+                     assets=shot_assets, theme=theme, poll=not no_wait,
                      service_url=(service_url or None))
     if no_wait:
         log(f"submitted render {job['renderId']} (job {job['job_id']})")

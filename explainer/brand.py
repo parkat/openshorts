@@ -49,3 +49,55 @@ BRAND = {
     "logo": "assets/brand/logo-mark.png",       # primary mark (corner bug / intro)
     "wordmark": "assets/brand/wordmark.png",    # SCIENTIFIC AWARENESS (intro / end card)
 }
+
+
+# --- MOODS ------------------------------------------------------------------
+# A mood overrides the palette, the TTS delivery, and the generated-aid art
+# direction for a batch whose subject demands a different register (e.g. an
+# investigative/warning piece vs. the default upbeat explainer). Selected per
+# project via draft.script["mood"]; falls back to "default".
+MOODS = {
+    "default": {
+        "palette": BRAND["palette"],
+        "highlight": "#FFD21E",
+        "tts_tone": BRAND["tts_tone"],
+        "aid_style": None,          # None = aid.py's standard cream/teal STYLE
+        "vhs": BRAND.get("vhs"),
+    },
+    # Dark: investigative / grave. Near-black ground, cold steel + warning amber,
+    # blood red for the accusation beats. Delivery is measured and heavy.
+    "dark": {
+        "palette": {
+            "red":    "#B4342B",
+            "orange": "#C2762E",
+            "yellow": "#D6A63C",
+            "teal":   "#3E6E78",
+            "blue":   "#3C5B84",
+            "purple": "#5B4472",
+            "cream":  "#0E1013",   # background (near-black)
+            "ink":    "#ECE8E1",   # text (bone white)
+        },
+        "highlight": "#FFC93C",     # amber — max legibility on dark footage
+        "tts_tone": (
+            "Read like the narrator of a serious investigative documentary delivering a "
+            "grave warning: measured, deliberate and low, unhurried, with weighted pauses "
+            "before the key phrases and cold restraint throughout. No hype, no upspeak, "
+            "no cheerfulness — the gravity comes from control, not volume"
+        ),
+        "aid_style": (
+            ". Flat 2D vector motion-graphic animation, stark minimal design, solid flat "
+            "color fills, crisp sharp edges, heavy dark outlines. Deep near-black charcoal "
+            "background, severe limited palette of cold steel blue and warning amber with "
+            "sparing blood red. High contrast, ominous, restrained. Slow deliberate motion. "
+            "Static locked-off camera, vertical composition. Completely WORDLESS: every "
+            "speech bubble, sign, screen and label is EMPTY or holds only simple abstract "
+            "glyphs — never written words or letterforms."
+        ),
+        "vhs": {"scanlines": True, "grain": "light", "chroma_wobble": "subtle"},
+    },
+}
+
+
+def mood(name=None):
+    """Resolve a mood preset by name (unknown/None -> default)."""
+    return MOODS.get((name or "default"), MOODS["default"])

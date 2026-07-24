@@ -33,9 +33,12 @@ def job_id_for(project_id):
     return f"explainer-{project_id}"
 
 
-def brand_theme():
-    """ExplainerTheme dict from the Scientific Awareness palette (brand.py)."""
-    p = BRAND["palette"]
+def brand_theme(mood_name=None):
+    """ExplainerTheme dict from the Scientific Awareness palette (brand.py).
+    `mood_name` selects a preset (e.g. "dark" for investigative pieces)."""
+    from explainer.brand import mood as _mood
+    m = _mood(mood_name)
+    p = m["palette"]
     return {
         "bg": p["cream"],
         "ink": p["ink"],
@@ -43,8 +46,9 @@ def brand_theme():
         # Concrete stacks — headless Chromium has no Eurostile/Futura installed.
         "displayFont": '"Arial Black", "Helvetica Neue", Arial, sans-serif',
         "captionFont": '"Arial Black", Impact, "Helvetica Neue", sans-serif',
-        "highlight": "#FFD21E",   # active-word caption color: vivid yellow (highest-visibility on any footage)
-        "vhs": bool(BRAND.get("vhs")),
+        # active-word caption color — must stay max-legible over any footage
+        "highlight": m["highlight"],
+        "vhs": bool(m.get("vhs")),
     }
 
 
