@@ -64,10 +64,26 @@ def _cached_full(url):
     return p if os.path.isfile(p) else None
 
 
+def _reframe_inplace(out_path):
+    """Reframe a 16:9 clip to vertical 9:16 centered on the speaker's face (so the
+    talker isn't cropped off by a naive center crop). Best-effort; leaves the clip
+    untouched if reframing isn't possible."""
+    try:
+        from explainer.assets import reframe
+        tmp = out_path + ".rf.mp4"
+        if reframe.reframe_to_vertical(out_path, tmp):
+            os.replace(tmp, out_path)
+        elif os.path.isfile(tmp):
+            os.remove(tmp)
+    except Exception:  # noqa: BLE001 — reframing must never break the fetch
+        pass
+
+
 def fetch_clip(url, start_s, end_s, out_path):
-    """Get the [start_s, end_s] window of a YouTube URL as a clean H.264/AAC clip.
-    Cuts from a locally cached full download if one exists (no network); otherwise
-    downloads just that section via yt-dlp. Returns out_path."""
+    """Get the [start_s, end_s] window of a YouTube URL as a clean, vertical
+    (speaker-framed) H.264/AAC clip. Cuts from a locally cached full download if one
+    exists (no network); otherwise downloads just that section via yt-dlp. Returns
+    out_path."""
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     full = _cached_full(url)
     if full:
@@ -78,6 +94,7 @@ def fetch_clip(url, start_s, end_s, out_path):
              "-movflags", "+faststart", out_path],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if r.returncode == 0 and os.path.isfile(out_path):
+            _reframe_inplace(out_path)
             return out_path
     section = f"*{float(start_s):.2f}-{float(end_s):.2f}"
     cmd = [
@@ -93,6 +110,7 @@ def fetch_clip(url, start_s, end_s, out_path):
     r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if r.returncode != 0 or not os.path.isfile(out_path):
         raise RuntimeError(f"yt-dlp failed for {url}: {r.stderr.decode()[:300]}")
+    _reframe_inplace(out_path)
     return out_path
 
 
