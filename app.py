@@ -236,6 +236,14 @@ THUMBNAILS_DIR = os.path.join(OUTPUT_DIR, "thumbnails")
 os.makedirs(THUMBNAILS_DIR, exist_ok=True)
 app.mount("/thumbnails", StaticFiles(directory=THUMBNAILS_DIR), name="thumbnails")
 
+# Explainer lane — the second "driver" (dashboard) over the shared SQLite store.
+# All /api/explainer/* routes live in explainer_routes.py.
+try:
+    from explainer_routes import router as explainer_router
+    app.include_router(explainer_router)
+except Exception as _exc:  # pragma: no cover — never let it break the whole server
+    print(f"⚠️ explainer routes not mounted: {_exc}")
+
 # ---------------------------------------------------------------------------
 # Edit presets (backend-synced, so they're available on every device) + batch
 # download. Presets live in the project dir (bind-mounted), NOT in OUTPUT_DIR
