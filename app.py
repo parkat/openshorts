@@ -10,6 +10,7 @@ import shutil
 import glob
 import time
 import asyncio
+import functools
 from dotenv import load_dotenv
 from typing import Dict, Optional, List
 from contextlib import asynccontextmanager
@@ -447,11 +448,21 @@ async def buffer_post(body: BufferPostBody, api_key: str = Header(None, alias="X
 
     video_url = f"{MEDIA_BASE_URL}/m/{_mint_media_token(body.job_id, safe)}"
     results = []
+    loop = asyncio.get_event_loop()
     for ch in body.channels:
         try:
-            post = buffer_client.create_video_post(
-                api_key, ch.id, ch.service, ch.text, video_url,
-                title=body.title, schedule_iso=body.schedule_iso, scheduling=body.scheduling,
+            # MUST run off the event loop. create_video_post blocks on requests(),
+            # and Buffer fetches the /m/<token> URL *from this same server* while
+            # that call is in flight — blocking here deadlocks the two and Buffer
+            # reports "Video could not be read from its URL".
+            post = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    buffer_client.create_video_post,
+                    api_key, ch.id, ch.service, ch.text, video_url,
+                    title=body.title, schedule_iso=body.schedule_iso,
+                    scheduling=body.scheduling,
+                ),
             )
             results.append({"service": ch.service, "ok": True,
                             "post_id": post.get("id"), "status": post.get("status")})
