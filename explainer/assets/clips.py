@@ -94,8 +94,7 @@ def fetch_clip(url, start_s, end_s, out_path):
              "-movflags", "+faststart", out_path],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if r.returncode == 0 and os.path.isfile(out_path):
-            _reframe_inplace(out_path)
-            return out_path
+            return out_path  # keep full 16:9 — the render uses a blurred-bars layout
     section = f"*{float(start_s):.2f}-{float(end_s):.2f}"
     cmd = [
         "yt-dlp", "--no-playlist",
@@ -110,8 +109,7 @@ def fetch_clip(url, start_s, end_s, out_path):
     r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if r.returncode != 0 or not os.path.isfile(out_path):
         raise RuntimeError(f"yt-dlp failed for {url}: {r.stderr.decode()[:300]}")
-    _reframe_inplace(out_path)
-    return out_path
+    return out_path  # keep full 16:9 — the render uses a blurred-bars layout
 
 
 def log_provenance(session, project_id, url, start_s, end_s, local_path, channel=""):

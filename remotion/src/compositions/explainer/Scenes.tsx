@@ -266,24 +266,33 @@ export const StatScene: React.FC<SceneProps> = ({ scene, theme }) => {
 /** User-supplied accent clip (talking head). Continuous — NOT beat-cut, so the
  * speaker isn't chopped. Shows "via <source>". */
 export const AccentClipScene: React.FC<SceneProps> = ({ scene, theme }) => {
-  const frame = useCurrentFrame();
-  const { durationInFrames } = useVideoConfig();
-  const t = interpolate(frame, [0, Math.max(1, durationInFrames)], [0, 1], {
-    extrapolateRight: "clamp",
-  });
   return (
   <AbsoluteFill style={{ backgroundColor: "#000" }}>
     {scene.videoUrl && (
-      <OffthreadVideo
-        src={scene.videoUrl}
-        muted
-        style={{
-          width: "100%",
-          height: "100%",
-          objectFit: "cover",
-          transform: `scale(${1.03 + 0.09 * t})`,  // slow push-in so a held soundbite isn't static
-        }}
-      />
+      <>
+        {/* Blurred, zoomed copy fills the 9:16 frame as the top/bottom bars. */}
+        <AbsoluteFill>
+          <OffthreadVideo
+            src={scene.videoUrl}
+            muted
+            style={{
+              width: "100%",
+              height: "100%",
+              objectFit: "cover",
+              transform: "scale(1.25)",
+              filter: "blur(40px) brightness(0.5) saturate(1.15)",
+            }}
+          />
+        </AbsoluteFill>
+        {/* The FULL 16:9 clip, fit to width and centered — nobody gets cropped. */}
+        <AbsoluteFill style={{ justifyContent: "center", alignItems: "center" }}>
+          <OffthreadVideo
+            src={scene.videoUrl}
+            muted
+            style={{ width: "100%", height: "auto" }}
+          />
+        </AbsoluteFill>
+      </>
     )}
     {scene.attribution && (
       <div
