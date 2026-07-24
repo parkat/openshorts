@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, RotateCcw, Copy, Check, AlertTriangle, Film } from 'lucide-react';
 import { explainerApi, STATUS_TINT, getApiUrl } from './api';
+import StageBar from './StageBar';
 
 function CopyBtn({ text }) {
   const [copied, setCopied] = useState(false);
@@ -92,6 +93,10 @@ export default function ProjectStudio({ projectId, onBack }) {
               </div>
               <h1 className="text-2xl font-bold text-white">{project.title || '(untitled)'}</h1>
             </div>
+          </div>
+
+          <div className="mb-6">
+            <StageBar detail={detail} projectId={projectId} onChanged={load} />
           </div>
 
           <div className="grid md:grid-cols-2 gap-6">

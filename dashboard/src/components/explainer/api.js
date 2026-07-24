@@ -13,11 +13,20 @@ async function jsonOrThrow(res) {
   return res.json();
 }
 
+const postJson = (path, body) => fetch(getApiUrl(`${BASE}${path}`), {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body || {}),
+}).then(jsonOrThrow);
+
 export const explainerApi = {
   queue: () => fetch(getApiUrl(`${BASE}/queue`)).then(jsonOrThrow),
   project: (id) => fetch(getApiUrl(`${BASE}/projects/${id}`)).then(jsonOrThrow),
   postkit: (id) => fetch(getApiUrl(`${BASE}/projects/${id}/postkit`)).then(jsonOrThrow),
   cacheStats: () => fetch(getApiUrl(`${BASE}/cache/stats`)).then(jsonOrThrow),
+  job: (jobId) => fetch(getApiUrl(`${BASE}/jobs/${jobId}`)).then(jsonOrThrow),
+  // stage runners → { job_id }
+  render: (id, opts = {}) => postJson('/render', { project_id: id, ...opts }),
 };
 
 // Project.status → tailwind tint. Mirrors the pipeline state machine.

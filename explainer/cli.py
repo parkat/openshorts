@@ -382,49 +382,12 @@ def cmd_factcheck(args):
 def cmd_render(args):
     """Render the project (align.json + narration + assets) -> 9:16 MP4."""
     store.init_db()
-    from explainer import render as rnd
-    proj_dir = _proj_dir(args.project_id)
-    align_path = os.path.join(proj_dir, "align.json")
-    if not os.path.isfile(align_path):
-        print(f"no {align_path} — run `align` first")
-        return
-    with open(align_path, encoding="utf-8") as f:
-        alignment = json.load(f)
-    # Optional asset manifest from `assets` (music bed + accent-clip shot map).
-    music_url, shot_assets, clip_flags = None, None, []
-    apath = os.path.join(proj_dir, "assets.json")
-    if os.path.isfile(apath):
-        with open(apath, encoding="utf-8") as f:
-            man = json.load(f)
-        music_url = man.get("music")
-        shot_assets = {int(k): v for k, v in (man.get("shot_assets") or {}).items()}
-        clip_flags = man.get("clip_flags") or []
-    blocks = [f for f in clip_flags if f.get("level") == "block"]
-    if blocks and not args.force:
-        print(f"⛔ {len(blocks)} unresolved guardrail block(s) — fix or re-run with --force:")
-        for f in blocks:
-            print(f"   {f['code']}: {f['message']}")
-        return
-    narration_url = _proj_url(args.project_id, "narration.wav")
-    # Honest narration-dominance signal (§5), from displayed (not fetched) durations.
-    scenes = rnd.build_scene_list(alignment, shot_assets)
-    frac = rnd.accent_display_fraction(scenes)
-    if frac > 0.4:
-        print(f"⚠️ accent footage is {frac*100:.0f}% of runtime — keep original ≥60% (§5).")
-    with store.session() as s:
-        s.get(store.Project, args.project_id).status = "render"
-        s.commit()
-    print(f"rendering project #{args.project_id} via {rnd.RENDER_SERVICE_URL} …", flush=True)
-    job = rnd.render(alignment, narration_url, args.project_id, music_url=music_url,
-                     assets=shot_assets, poll=not args.no_wait,
-                     service_url=(args.service_url or None))
-    if args.no_wait:
-        print(f"submitted render {job['renderId']} (job {job['job_id']})")
-    else:
-        with store.session() as s:
-            s.get(store.Project, args.project_id).status = "review"
-            s.commit()
-        print(f"rendered → output/{job['job_id']}/{job.get('output_basename')}")
+    from explainer import service
+    try:
+        service.run_render(args.project_id, force=args.force, no_wait=args.no_wait,
+                           service_url=(args.service_url or None))
+    except FileNotFoundError as e:
+        print(str(e))
 
 
 def cmd_approve(args):
