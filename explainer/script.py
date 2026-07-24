@@ -46,6 +46,11 @@ Shorts channel. Write a 30-45 second vertical Short in a HYPE HOT-TAKE voice:
     AND the single idea it makes the viewer understand. Abstract/conceptual is GOOD
     here (this is the channel's primary explanatory visual now). PREFER `aid` over a
     plain text beat whenever a point can be shown.
+    NEVER ask for WRITTEN WORDS in an aid — no "speech bubbles in many languages",
+    no signs/labels/screens bearing text, no "the word X". The video model cannot
+    spell and renders garbled fake glyphs. Show the idea with SHAPES, symbols, icons,
+    arrows, counts and motion instead (e.g. NOT "bubbles in many languages" but
+    "dozens of small abstract glyph icons streaming outward"). Captions carry words.
   * broll = a REAL, FILMABLE stock scene, ONLY for a literal real-world thing a camera
     shoots (e.g. "data center server racks", "hands on a keyboard"). Use sparingly; if
     the point is a concept, use `aid` instead. NEVER a named person / specific show.

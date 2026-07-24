@@ -31,8 +31,37 @@ STYLE = (
     "color fills, crisp sharp edges, consistent bold dark charcoal outlines, even flat "
     "lighting. Warm cream background, limited muted palette of teal and warm orange "
     "accents. Simple, high-contrast, smooth motion. Static locked-off camera, vertical "
-    "composition."
+    "composition. Completely WORDLESS: every speech bubble, sign, screen and label is "
+    "EMPTY or holds only simple abstract glyphs (dots, wavy lines, small icons) — never "
+    "written words or letterforms."
 )
+
+# Veo obeys the POSITIVE prompt over the negative field: a note that asks for
+# "speech bubbles in many languages" forces it to invent garbled fake glyphs. So
+# rewrite text-summoning phrases in the note itself before we ever send it.
+# (Keeps existing scripts safe without regenerating them; script.py also teaches
+# the writer not to ask for text in the first place.)
+_TEXT_SUBS = [
+    (r"\bspeech bubbles?\s+(?:in|with|of|showing|filled with)\s+[^,.;]+",
+     "empty speech bubbles with small abstract glyph icons"),
+    (r"\b(?:in|with)\s+(?:many|multiple|different|various|several|dozens of|100)\s+languages\b",
+     "with small abstract glyph icons"),
+    (r"\b(?:written|readable|legible)\s+(?:text|words?|labels?|captions?)\b",
+     "abstract glyph icons"),
+    (r"\b(?:text|words?|labels?|captions?|writing|letters?|headlines?)\s+(?:that\s+)?(?:reads?|saying|spelling)\s+[^,.;]+",
+     "an abstract glyph icon"),
+    (r"\blabell?ed\s+[\"“][^\"”]+[\"”]", "marked with an abstract glyph icon"),
+]
+
+
+def scrub_text_requests(note):
+    """Neutralize phrases that ask the video model to render written words.
+    Returns the rewritten note (unchanged if nothing matched)."""
+    import re
+    out = note or ""
+    for pat, repl in _TEXT_SUBS:
+        out = re.sub(pat, repl, out, flags=re.I)
+    return out
 
 # Dedicated negative-prompt field — bare nouns Veo should never render.
 NEGATIVE = (
@@ -70,7 +99,7 @@ def generate_aids(shots, out_dir, key=None, log=print):
     for i, shot in enumerate(shots):
         if shot.get("visual") != AID_SHOT:
             continue
-        note = (shot.get("visual_note") or "").strip()
+        note = scrub_text_requests((shot.get("visual_note") or "").strip())
         labels = _svg._keywords(note)[:12]
         n = _n_clips(shot)
         for j in range(n):
