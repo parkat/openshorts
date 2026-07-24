@@ -26,7 +26,15 @@ export const explainerApi = {
   cacheStats: () => fetch(getApiUrl(`${BASE}/cache/stats`)).then(jsonOrThrow),
   job: (jobId) => fetch(getApiUrl(`${BASE}/jobs/${jobId}`)).then(jsonOrThrow),
   // stage runners → { job_id }
+  script: (topicId, opts = {}) => postJson('/script', { topic_id: topicId, ...opts }),
+  clipfind: (id, opts = {}) => postJson('/clipfind', { project_id: id, ...opts }),
+  factcheck: (id, opts = {}) => postJson('/factcheck', { project_id: id, ...opts }),
+  assets: (id, opts = {}) => postJson('/assets', { project_id: id, ...opts }),
+  align: (id, opts = {}) => postJson('/align', { project_id: id, ...opts }),
   render: (id, opts = {}) => postJson('/render', { project_id: id, ...opts }),
+  schedule: (id) => postJson('/schedule', { project_id: id }),
+  // direct (non-job) actions
+  approve: (id) => postJson(`/drafts/${id}/approve`, {}),
 };
 
 // Project.status → tailwind tint. Mirrors the pipeline state machine.

@@ -13,10 +13,24 @@ anything.
 import os
 import re
 import json
+from dataclasses import dataclass
 
 import store
 
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "output")
+
+
+@dataclass
+class AssetOpts:
+    """Mirrors the `assets` CLI toggles; the API request body maps 1:1."""
+    voice: str = None
+    tone: str = None        # None = brand default; "none"/"off"/"" = disabled
+    speed: float = 1.0
+    no_clips: bool = False
+    no_visuals: bool = False
+    ai_visuals: bool = False
+    no_svg: bool = False
+    no_music: bool = False
 
 
 # --- shared filesystem/query helpers (were private in cli.py) ---
@@ -166,6 +180,298 @@ def project_detail(project_id):
 
 
 # --- pipeline stages (shared by CLI + API; log() streams progress) -----------
+
+def run_script(topic_id, model=None, log=print):
+    """Generate a shot-list from a topic; create the Project + Draft. Returns
+    {project_id, draft_id, script}. New projects start at status 'draft' (reserve
+    'review' for the post-render gate)."""
+    from explainer import script as scr
+    with store.session() as s:
+        topic = s.get(store.Topic, topic_id)
+        if not topic:
+            raise ValueError(f"topic #{topic_id} not found")
+        log(f"drafting script for topic #{topic.id}: {topic.title} …")
+        sl = scr.generate_script(topic.title, topic.summary, topic.sources or [],
+                                 model=(model or None))
+        proj = store.Project(topic_id=topic.id, title=sl.get("title") or topic.title,
+                             status="draft")
+        s.add(proj)
+        s.flush()
+        draft = store.Draft(project_id=proj.id, script=sl, status="needs_review")
+        s.add(draft)
+        s.commit()
+        pid, did = proj.id, draft.id
+    log(f"=== {sl.get('title')}  (~{sl.get('estimated_seconds')}s) ===")
+    for shot in sl.get("shots", []):
+        log(f"[{str(shot.get('role','?')):6}] {shot.get('seconds','?')}s  {shot.get('narration','')}")
+    log(f"stored → project #{pid}, draft #{did} (status: draft / needs_review)")
+    return {"project_id": pid, "draft_id": did, "script": sl}
+
+
+def run_clipfind(project_id, model=None, log=print):
+    """Pick the best accent-clip window per accent_clip shot from the reference
+    transcripts; write clips_plan.json. Returns the plan."""
+    from explainer import clipfinder as cf
+    pdir = proj_dir(project_id)
+    with store.session() as s:
+        draft = latest_draft(s, project_id)
+        if not draft:
+            raise ValueError(f"no draft for project #{project_id}")
+        topic = s.get(store.Topic, s.get(store.Project, project_id).topic_id)
+        sources = (topic.sources if topic else None) or []
+        script = draft.script or {}
+    refs = [x for x in sources if x.get("type") == "youtube"]
+    if not refs:
+        log("no YouTube reference sources on this topic")
+        return {"selections": [], "references": [], "needs": 0}
+    log(f"reading {len(refs)} reference transcript(s) + selecting windows …")
+    result = cf.plan(script, sources, pdir, model=(model or None))
+    with open(os.path.join(pdir, "clips_plan.json"), "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+    log(f"{len(result['selections'])} clip(s) selected for {result['needs']} accent shot(s):")
+    for sel in result["selections"]:
+        dur = sel["out"] - sel["in"]
+        log(f"  shot {sel['shot_index']} ← {sel['channel']}  {sel['in']:.0f}–{sel['out']:.0f}s ({dur:.0f}s)")
+    return result
+
+
+def run_factcheck(project_id, source_text="", model=None, log=print):
+    """Extract + label claims from the latest draft; store flags for gate 1."""
+    from explainer import factcheck as fc
+    with store.session() as s:
+        draft = latest_draft(s, project_id)
+        if not draft:
+            raise ValueError(f"no draft for project #{project_id}")
+        log(f"fact-checking project #{project_id} "
+            f"({'with sources' if source_text else 'general knowledge, strict'}) …")
+        result = fc.factcheck(draft.script or {}, source_text, model=(model or None))
+        draft.factcheck = result
+        if any(c["label"] != "supported" for c in result["claims"]):
+            draft.status = "needs_review"
+        s.commit()
+    sm = result["summary"]
+    log(f"claims: {sm['supported']} supported · {sm['overstated']} overstated · "
+        f"{sm['unsupported']} unsupported")
+    for c in fc.flags(result):
+        mark = "⛔" if c["label"] == "unsupported" else "⚠️"
+        log(f"  {mark} [{c['label']}] {c['claim']}")
+        if c.get("note"):
+            log(f"       ↳ {c['note']}")
+    return result
+
+
+def run_assets(project_id, opts=None, log=print):
+    """Build TTS narration, accent clips (guardrails + provenance), b-roll/aids/
+    SVGs, and a ducked music bed → assets.json. Sets Project.status='assets'.
+    Returns the manifest (incl. clip_flags for gate 1)."""
+    opts = opts or AssetOpts()
+    from explainer.assets import tts, audio
+    from explainer import render as rnd
+    from explainer.brand import BRAND
+    pdir = proj_dir(project_id)
+    with store.session() as s:
+        draft = latest_draft(s, project_id)
+        if not draft:
+            raise ValueError(f"no draft for project #{project_id}")
+        script = draft.script or {}
+        shots = script.get("shots", [])
+        topic = s.get(store.Topic, s.get(store.Project, project_id).topic_id)
+        sources = (topic.sources if topic else None) or []
+        voice = opts.voice or draft.voice_id or None
+
+        if opts.tone is None:
+            tone = BRAND.get("tts_tone")
+        elif str(opts.tone).strip().lower() in ("", "none", "off", "neutral"):
+            tone = None
+        else:
+            tone = opts.tone
+        if tone:
+            log(f"  tone: {tone}")
+
+        manifest = {"music": None, "shot_assets": {}, "clip_flags": [], "narration_seconds": 0}
+
+        # 1) Accent clips FIRST (soundbite narration needs the clip durations).
+        sa = {}
+        if not opts.no_clips:
+            from explainer.assets import clips as clp
+            plan_path = os.path.join(pdir, "clips_plan.json")
+            if os.path.isfile(plan_path):
+                with open(plan_path, encoding="utf-8") as pf:
+                    sels = (json.load(pf) or {}).get("selections", [])
+                if sels:
+                    log(f"fetching {len(sels)} clip-finder window(s) …")
+                    res = clp.gather_from_plan(s, project_id, sels, pdir)
+                    sa = res["shot_assets"]
+                    manifest["clip_flags"] = res["flags"]
+            elif any(x.get("type") == "youtube" for x in sources):
+                log("fetching accent clips (manual timestamps) …")
+                res = clp.gather_accent_clips(s, project_id, sources, pdir)
+                manifest["clip_flags"] = res["flags"]
+                job_id = rnd.job_id_for(project_id)
+                sa = rnd.shot_assets_from_clips(shots, res["clips"], job_id)
+            for f in manifest["clip_flags"]:
+                mark = "⛔" if f["level"] == "block" else "⚠️"
+                log(f"  {mark} {f['code']}: {f['message']}")
+
+        # 1b) B-roll for figure/broll shots (real stock by default; AI stills opt-in).
+        n_broll = sum(1 for sh in shots if sh.get("visual") == "broll")
+        if not opts.no_visuals and n_broll:
+            if opts.ai_visuals:
+                from explainer.assets import visuals as vis
+                log(f"generating AI stills for {n_broll} figure/broll shot(s) …")
+                sa = vis.gather_visuals(shots, pdir, sa)
+            elif os.environ.get("PIXABAY"):
+                from explainer.assets import stock
+                log(f"fetching stock b-roll for {n_broll} figure/broll shot(s) …")
+                sa, got = stock.gather_stock(shots, pdir, sa, os.environ["PIXABAY"])
+                if got:
+                    manifest["footage_credit"] = "Pixabay"
+                log(f"  stock clips: {got}/{n_broll}")
+            else:
+                log("  ⚠️ no PIXABAY key — figure/broll shots fall back to text.")
+
+        # 1c) Generated visual-aid clips for `aid` shots (idempotent per clip).
+        n_aid = sum(1 for sh in shots if sh.get("visual") == "aid")
+        if n_aid and not opts.no_visuals:
+            from explainer.assets import aid as aidmod
+            made, acost = aidmod.generate_aids(shots, pdir, key=os.environ.get("OPENROUTER"))
+            if made:
+                log(f"aid clips: generated {made} (${acost:.2f})")
+            sa, wired = aidmod.gather_aids(shots, pdir, sa)
+            if wired:
+                log(f"aid graphics: {wired}/{n_aid} aid shot(s) wired")
+
+        # 1d) Animated SVG graphics for text beats.
+        if not opts.no_svg:
+            from explainer.assets import svg as svgmod
+            n_text = sum(1 for sh in shots if sh.get("visual") in svgmod._SVG_SHOTS)
+            if n_text:
+                sa, got = svgmod.gather_svgs(shots, pdir, sa)
+                if got:
+                    log(f"svg graphics: {got}/{n_text} eligible beat(s)")
+        manifest["shot_assets"] = {str(k): v for k, v in sa.items()}
+
+        # 2) Narration (soundbite-mixed timeline when a shot speaks, else a read).
+        narration_path = os.path.join(pdir, "narration.wav")
+        soundbite_paths = {}
+        for i, shot in enumerate(shots):
+            if shot.get("speaks") and i in sa:
+                ref = sa[i].get("speechUrl") or sa[i].get("videoUrl")
+                if ref:
+                    soundbite_paths[i] = os.path.join(pdir, os.path.basename(ref))
+        log(f"narrating project #{project_id} (voice={voice or 'brand default'}) …")
+        if soundbite_paths and audio.has_soundbites(shots):
+            _, timeline = audio.assemble(shots, soundbite_paths, narration_path,
+                                         tone=tone, speed=opts.speed,
+                                         **({"voice": voice} if voice else {}))
+            with open(os.path.join(pdir, "timeline.json"), "w", encoding="utf-8") as tf:
+                json.dump(timeline, tf, ensure_ascii=False, indent=2)
+            secs = (timeline[-1]["end_ms"] / 1000.0) if timeline else 0.0
+            log(f"  assembled narration + {len(soundbite_paths)} soundbite(s) → {secs:.1f}s")
+        else:
+            _, secs = tts.narrate(script, narration_path, tone=tone, speed=opts.speed,
+                                  **({"voice": voice} if voice else {}))
+            log(f"  narration → {secs:.1f}s")
+        manifest["narration_seconds"] = secs
+
+        # 3) Ducked CC0 music bed (optional; never blocks assets).
+        if not opts.no_music:
+            from explainer.assets import music as mus
+            bed = os.path.join(pdir, "music.wav")
+            try:
+                if mus.build_bed(project_id, narration_path, bed):
+                    manifest["music"] = proj_url(project_id, "music.wav")
+                    log(f"  music bed → {os.path.basename(bed)} (ducked)")
+                else:
+                    log("  (no CC0 tracks in library — skipping music)")
+            except Exception as e:  # noqa: BLE001
+                log(f"  ⚠️ music duck failed (skipping): {e}")
+
+        with open(os.path.join(pdir, "assets.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+        s.get(store.Project, project_id).status = "assets"
+        s.commit()
+    blocks = [f for f in manifest["clip_flags"] if f["level"] == "block"]
+    log(f"assets ready → assets.json"
+        + (f"  ({len(blocks)} block flag(s) to resolve in gate 1)" if blocks else ""))
+    return manifest
+
+
+def run_align(project_id, log=print):
+    """Word-timestamp the narration against the shot list → align.json."""
+    from explainer import align as al
+    with store.session() as s:
+        draft = latest_draft(s, project_id)
+        if not draft:
+            raise ValueError(f"no draft for project #{project_id}")
+        script = draft.script or {}
+    pdir = proj_dir(project_id)
+    audio_path = os.path.join(pdir, "narration.wav")
+    if not os.path.isfile(audio_path):
+        raise FileNotFoundError(f"no narration for project #{project_id} — run `assets` first")
+    timeline = None
+    tpath = os.path.join(pdir, "timeline.json")
+    if os.path.isfile(tpath):
+        with open(tpath, encoding="utf-8") as tf:
+            timeline = json.load(tf)
+    soundbite_clips, soundbite_words = {}, {}
+    apath = os.path.join(pdir, "assets.json")
+    if os.path.isfile(apath):
+        with open(apath, encoding="utf-8") as af:
+            sa = (json.load(af) or {}).get("shot_assets", {})
+        for i, shot in enumerate(script.get("shots", [])):
+            if not shot.get("speaks"):
+                continue
+            entry = sa.get(str(i)) or {}
+            ref = entry.get("speechUrl") or entry.get("videoUrl")
+            if ref:
+                soundbite_clips[i] = os.path.join(pdir, os.path.basename(ref))
+            wu = entry.get("wordsUrl")
+            if wu:
+                wp = os.path.join(pdir, os.path.basename(wu))
+                if os.path.isfile(wp):
+                    with open(wp, encoding="utf-8") as wf:
+                        soundbite_words[i] = json.load(wf)
+    if soundbite_words:
+        log(f"  captions: pulled transcript for {len(soundbite_words)} soundbite(s) "
+            f"(ASR fallback for the rest)")
+    log(f"aligning project #{project_id}{' (soundbite timeline)' if timeline else ''} …")
+    alignment = al.align(audio_path, script, timeline=timeline,
+                         soundbite_clips=soundbite_clips, soundbite_words=soundbite_words)
+    out = os.path.join(pdir, "align.json")
+    al.write_alignment(alignment, out)
+    log(f"aligned {len(alignment['words'])} words, {len(alignment['shots'])} shots "
+        f"({alignment['duration_ms']/1000:.1f}s)")
+    return {"words": len(alignment["words"]), "shots": len(alignment["shots"]),
+            "duration_ms": alignment["duration_ms"]}
+
+
+def approve_draft(project_id, log=print):
+    """Gate 2: mark the latest draft approved so the scheduler can drip it."""
+    with store.session() as s:
+        draft = latest_draft(s, project_id)
+        if not draft:
+            raise ValueError(f"no draft for project #{project_id}")
+        draft.status = "approved"
+        s.commit()
+        did = draft.id
+    log(f"project #{project_id} draft #{did} approved")
+    return {"project_id": project_id, "draft_id": did, "status": "approved"}
+
+
+def run_schedule(project_id=None, log=print):
+    """Schedule one project now, or drip the next ready one (scheduler tick)."""
+    from explainer import schedule as sch
+    res = sch.schedule_project(project_id) if project_id else sch.tick()
+    if not res:
+        log("nothing ready to schedule (need an approved, rendered project)")
+        return None
+    log(f"scheduled project #{res['project_id']} for {res['due_at']}")
+    for r in res.get("results", []):
+        ok = "✓" if r.get("ok") else "✗"
+        log(f"  {ok} {r['service']}: {r.get('post_id') or r.get('error')}")
+    return res
+
 
 def run_render(project_id, force=False, no_wait=False, service_url=None, log=print):
     """Render a project (align.json + narration + assets) → 9:16 MP4.

@@ -86,32 +86,11 @@ def cmd_queue(args):
 
 def cmd_script(args):
     store.init_db()
-    from explainer import script as scr
-    with store.session() as s:
-        topic = s.get(store.Topic, args.topic_id)
-        if not topic:
-            print(f"topic #{args.topic_id} not found")
-            return
-        print(f"drafting script for topic #{topic.id}: {topic.title} …", flush=True)
-        sl = scr.generate_script(topic.title, topic.summary, topic.sources or [],
-                                 model=(args.model or None))
-        proj = store.Project(topic_id=topic.id, title=sl.get("title") or topic.title, status="review")
-        s.add(proj)
-        s.flush()
-        draft = store.Draft(project_id=proj.id, script=sl, status="needs_review")
-        s.add(draft)
-        s.commit()
-        print(f"\n=== {sl.get('title')}  (~{sl.get('estimated_seconds')}s) ===")
-        for shot in sl.get("shots", []):
-            print(f"[{str(shot.get('role','?')):6}] {shot.get('seconds','?')}s  {shot.get('narration','')}")
-            print(f"         · {shot.get('visual','?')}: {shot.get('visual_note','')}  (src: {shot.get('source')})")
-        caps = sl.get("captions", {})
-        if caps:
-            print("\ncaptions:")
-            for k in ("youtube", "tiktok", "instagram"):
-                if caps.get(k):
-                    print(f"  {k}: {caps[k]}")
-        print(f"\nstored → project #{proj.id}, draft #{draft.id} (status: needs_review)")
+    from explainer import service
+    try:
+        service.run_script(args.topic_id, model=(args.model or None))
+    except ValueError as e:
+        print(str(e))
 
 
 def cmd_assets(args):
@@ -119,264 +98,51 @@ def cmd_assets(args):
     provenance), and a ducked CC0 music bed. Writes an assets.json manifest that
     `render` consumes. Skips clips (--no-clips) or music (--no-music) on request."""
     store.init_db()
-    from explainer.assets import tts, audio
-    from explainer import render as rnd
-    proj_dir = _proj_dir(args.project_id)
-    with store.session() as s:
-        draft = _latest_draft(s, args.project_id)
-        if not draft:
-            print(f"no draft for project #{args.project_id}")
-            return
-        script = draft.script or {}
-        shots = script.get("shots", [])
-        topic = s.get(store.Topic, s.get(store.Project, args.project_id).topic_id)
-        sources = (topic.sources if topic else None) or []
-        voice = args.voice or draft.voice_id or None
-        # Tone: --tone overrides; default = brand tone; "none"/"off"/"" disables.
-        from explainer.brand import BRAND
-        if args.tone is None:
-            tone = BRAND.get("tts_tone")
-        elif args.tone.strip().lower() in ("", "none", "off", "neutral"):
-            tone = None
-        else:
-            tone = args.tone
-        if tone:
-            print(f"  tone: {tone}")
-
-        manifest = {"music": None, "shot_assets": {}, "clip_flags": [], "narration_seconds": 0}
-
-        # 1) Accent clips FIRST (soundbite narration needs the clip durations).
-        #    Prefer a clip-finder plan (transcript-selected windows tied to shots);
-        #    else fall back to the topic's manual in/out timestamps.
-        sa = {}
-        if not args.no_clips:
-            from explainer.assets import clips as clp
-            plan_path = os.path.join(proj_dir, "clips_plan.json")
-            if os.path.isfile(plan_path):
-                with open(plan_path, encoding="utf-8") as pf:
-                    sels = (json.load(pf) or {}).get("selections", [])
-                if sels:
-                    print(f"fetching {len(sels)} clip-finder window(s) …", flush=True)
-                    res = clp.gather_from_plan(s, args.project_id, sels, proj_dir)
-                    sa = res["shot_assets"]
-                    manifest["clip_flags"] = res["flags"]
-            elif any(x.get("type") == "youtube" for x in sources):
-                print("fetching accent clips (manual timestamps) …", flush=True)
-                res = clp.gather_accent_clips(s, args.project_id, sources, proj_dir)
-                manifest["clip_flags"] = res["flags"]
-                job_id = rnd.job_id_for(args.project_id)
-                sa = rnd.shot_assets_from_clips(shots, res["clips"], job_id)
-            for f in manifest["clip_flags"]:
-                mark = "⛔" if f["level"] == "block" else "⚠️"
-                print(f"  {mark} {f['code']}: {f['message']}")
-
-        # 1b) B-roll for figure/broll shots. Default: REAL stock footage (Pixabay,
-        #     commercial-safe, no AI-disclosure label). AI stills only with
-        #     --ai-visuals. Either way, Ken Burns / jump-cuts apply in the render.
-        n_broll = sum(1 for sh in shots if sh.get("visual") == "broll")
-        if not args.no_visuals and n_broll:
-            if args.ai_visuals:
-                from explainer.assets import visuals as vis
-                print(f"generating AI stills for {n_broll} figure/broll shot(s) …", flush=True)
-                sa = vis.gather_visuals(shots, proj_dir, sa)
-            elif os.environ.get("PIXABAY"):
-                from explainer.assets import stock
-                print(f"fetching stock b-roll for {n_broll} figure/broll shot(s) …", flush=True)
-                sa, got = stock.gather_stock(shots, proj_dir, sa, os.environ["PIXABAY"])
-                if got:
-                    manifest["footage_credit"] = "Pixabay"  # attribution (Pixabay's kind request)
-                print(f"  stock clips: {got}/{n_broll}"
-                      + ("" if got == n_broll else "  (unmatched shots fall back to text)"))
-            else:
-                print("  ⚠️ no PIXABAY key in .env — figure/broll shots fall back to text "
-                      "(add PIXABAY, or use --ai-visuals).")
-        # 1c) Generated visual-aid clips (HappyHorse video) for `aid` shots — the
-        #     primary explanatory visual. Idempotent per clip (reuses aid_<i>_*.mp4).
-        n_aid = sum(1 for sh in shots if sh.get("visual") == "aid")
-        if n_aid and not args.no_visuals:
-            from explainer.assets import aid as aidmod
-            made, acost = aidmod.generate_aids(shots, proj_dir,
-                                               key=os.environ.get("OPENROUTER"))
-            if made:
-                print(f"aid clips: generated {made} (${acost:.2f})")
-            sa, wired = aidmod.gather_aids(shots, proj_dir, sa)
-            if wired:
-                print(f"aid graphics: {wired}/{n_aid} aid shot(s) wired")
-        # 1d) Animated SVG graphics for text beats (user folder or built-in).
-        if not args.no_svg:
-            from explainer.assets import svg as svgmod
-            n_text = sum(1 for sh in shots if sh.get("visual") in svgmod._SVG_SHOTS)
-            if n_text:
-                sa, got = svgmod.gather_svgs(shots, proj_dir, sa)
-                if got:
-                    print(f"svg graphics: {got}/{n_text} eligible beat(s)")
-        manifest["shot_assets"] = {str(k): v for k, v in sa.items()}
-
-        # 2) Narration. Soundbite shorts assemble a mixed timeline (Orus + silence
-        #    gaps where the clip speaks); otherwise a single continuous TTS read.
-        narration_path = os.path.join(proj_dir, "narration.wav")
-        # Soundbite audio source = speechUrl (the reference-speaker clip), which is
-        # baked into the master even when the shot's VISUAL is an aid animation.
-        soundbite_paths = {}
-        for i, shot in enumerate(shots):
-            if shot.get("speaks") and i in sa:
-                ref = sa[i].get("speechUrl") or sa[i].get("videoUrl")
-                if ref:
-                    soundbite_paths[i] = os.path.join(proj_dir, os.path.basename(ref))
-        print(f"narrating project #{args.project_id} (voice={voice or 'brand default'}) …", flush=True)
-        if soundbite_paths and audio.has_soundbites(shots):
-            _, timeline = audio.assemble(shots, soundbite_paths, narration_path,
-                                         tone=tone, speed=args.speed,
-                                         **({"voice": voice} if voice else {}))
-            with open(os.path.join(proj_dir, "timeline.json"), "w", encoding="utf-8") as tf:
-                json.dump(timeline, tf, ensure_ascii=False, indent=2)
-            secs = (timeline[-1]["end_ms"] / 1000.0) if timeline else 0.0
-            print(f"  assembled narration + {len(soundbite_paths)} soundbite(s) → {secs:.1f}s")
-        else:
-            _, secs = tts.narrate(script, narration_path, tone=tone, speed=args.speed,
-                                  **({"voice": voice} if voice else {}))
-            print(f"  narration → {secs:.1f}s")
-        manifest["narration_seconds"] = secs
-
-        # 3) Ducked CC0 music bed
-        if not args.no_music:
-            from explainer.assets import music as mus
-            bed = os.path.join(proj_dir, "music.wav")
-            try:
-                if mus.build_bed(args.project_id, narration_path, bed):
-                    manifest["music"] = _proj_url(args.project_id, "music.wav")
-                    print(f"  music bed → {os.path.basename(bed)} (ducked)")
-                else:
-                    print("  (no CC0 tracks in library — skipping music)")
-            except Exception as e:  # noqa: BLE001 — music is optional, never block assets
-                print(f"  ⚠️ music duck failed (skipping): {e}")
-
-        with open(os.path.join(proj_dir, "assets.json"), "w", encoding="utf-8") as f:
-            json.dump(manifest, f, ensure_ascii=False, indent=2)
-        s.get(store.Project, args.project_id).status = "assets"
-        s.commit()
-    blocks = [f for f in manifest["clip_flags"] if f["level"] == "block"]
-    print(f"assets ready → {proj_dir}/assets.json"
-          + (f"  ({len(blocks)} block flag(s) to resolve in gate 1)" if blocks else ""))
+    from explainer import service
+    opts = service.AssetOpts(
+        voice=args.voice or None, tone=args.tone, speed=args.speed,
+        no_clips=args.no_clips, no_visuals=args.no_visuals,
+        ai_visuals=args.ai_visuals, no_svg=args.no_svg, no_music=args.no_music)
+    try:
+        service.run_assets(args.project_id, opts)
+    except ValueError as e:
+        print(str(e))
 
 
 def cmd_align(args):
     """Word-timestamp the narration against the shot list -> align.json."""
     store.init_db()
-    from explainer import align as al
-    with store.session() as s:
-        draft = _latest_draft(s, args.project_id)
-        if not draft:
-            print(f"no draft for project #{args.project_id}")
-            return
-        proj_dir = _proj_dir(args.project_id)
-        audio = os.path.join(proj_dir, "narration.wav")
-        if not os.path.isfile(audio):
-            print(f"no narration at {audio} — run `assets` first")
-            return
-        timeline = None
-        tpath = os.path.join(proj_dir, "timeline.json")
-        if os.path.isfile(tpath):
-            with open(tpath, encoding="utf-8") as tf:
-                timeline = json.load(tf)
-        # Per soundbite shot: the video's PULLED captions (preferred) + the clip file
-        # (ASR fallback). align uses captions and only whisper-transcribes the clip if
-        # the caption track was missing/malformed.
-        soundbite_clips, soundbite_words = {}, {}
-        apath = os.path.join(proj_dir, "assets.json")
-        if os.path.isfile(apath):
-            with open(apath, encoding="utf-8") as af:
-                sa = (json.load(af) or {}).get("shot_assets", {})
-            shots = (draft.script or {}).get("shots", [])
-            for i, shot in enumerate(shots):
-                if not shot.get("speaks"):
-                    continue
-                entry = sa.get(str(i)) or {}
-                ref = entry.get("speechUrl") or entry.get("videoUrl")
-                if ref:
-                    soundbite_clips[i] = os.path.join(proj_dir, os.path.basename(ref))
-                wu = entry.get("wordsUrl")
-                if wu:
-                    wp = os.path.join(proj_dir, os.path.basename(wu))
-                    if os.path.isfile(wp):
-                        with open(wp, encoding="utf-8") as wf:
-                            soundbite_words[i] = json.load(wf)
-        if soundbite_words:
-            print(f"  captions: pulled transcript for {len(soundbite_words)} soundbite(s) "
-                  f"(ASR fallback for the rest)")
-        print(f"aligning project #{args.project_id}{' (soundbite timeline)' if timeline else ''} …", flush=True)
-        alignment = al.align(audio, draft.script or {}, timeline=timeline,
-                             soundbite_clips=soundbite_clips, soundbite_words=soundbite_words)
-        out = os.path.join(_proj_dir(args.project_id), "align.json")
-        al.write_alignment(alignment, out)
-        print(f"aligned {len(alignment['words'])} words, {len(alignment['shots'])} shots "
-              f"({alignment['duration_ms']/1000:.1f}s) → {out}")
+    from explainer import service
+    try:
+        service.run_align(args.project_id)
+    except (ValueError, FileNotFoundError) as e:
+        print(str(e))
 
 
 def cmd_clipfind(args):
     """Read the reference videos' transcripts and pick the best accent-clip window
     for each accent_clip shot; write an inspectable clips_plan.json."""
     store.init_db()
-    from explainer import clipfinder as cf
-    proj_dir = _proj_dir(args.project_id)
-    with store.session() as s:
-        draft = _latest_draft(s, args.project_id)
-        if not draft:
-            print(f"no draft for project #{args.project_id}")
-            return
-        topic = s.get(store.Topic, s.get(store.Project, args.project_id).topic_id)
-        sources = (topic.sources if topic else None) or []
-        script = draft.script or {}
-    refs = [x for x in sources if x.get("type") == "youtube"]
-    if not refs:
-        print("no YouTube reference sources on this topic")
-        return
-    print(f"reading {len(refs)} reference transcript(s) + selecting windows …", flush=True)
-    result = cf.plan(script, sources, proj_dir, model=(args.model or None))
-    with open(os.path.join(proj_dir, "clips_plan.json"), "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
-    print("\nreferences:")
-    for r in result["references"]:
-        print(f"  {r['channel']} — {r['title'][:60]} ({int(r['duration'])}s, {r['segments']} segs)")
-    print(f"\n{len(result['selections'])} clip(s) selected for {result['needs']} accent shot(s):")
-    for sel in result["selections"]:
-        dur = sel["out"] - sel["in"]
-        print(f"  shot {sel['shot_index']} ← {sel['channel']}  {sel['in']:.0f}–{sel['out']:.0f}s ({dur:.0f}s)")
-        print(f"     “{sel['quote']}”")
-        print(f"     ↳ {sel['why']}")
-    print(f"\nplan → {proj_dir}/clips_plan.json  (assets will fetch these; edit to curate)")
+    from explainer import service
+    try:
+        service.run_clipfind(args.project_id, model=(args.model or None))
+    except ValueError as e:
+        print(str(e))
 
 
 def cmd_factcheck(args):
     """Extract atomic claims from the latest draft and label them against sources;
     store the flags on the draft for gate 1."""
     store.init_db()
-    from explainer import factcheck as fc
+    from explainer import service
     source_text = ""
     if args.source_file and os.path.isfile(args.source_file):
         with open(args.source_file, encoding="utf-8") as f:
             source_text = f.read()
-    with store.session() as s:
-        draft = _latest_draft(s, args.project_id)
-        if not draft:
-            print(f"no draft for project #{args.project_id}")
-            return
-        print(f"fact-checking project #{args.project_id} "
-              f"({'with sources' if source_text else 'general knowledge, strict'}) …", flush=True)
-        result = fc.factcheck(draft.script or {}, source_text, model=(args.model or None))
-        draft.factcheck = result
-        if any(c["label"] != "supported" for c in result["claims"]):
-            draft.status = "needs_review"
-        s.commit()
-        sm = result["summary"]
-        print(f"\nclaims: {sm['supported']} supported · {sm['overstated']} overstated · {sm['unsupported']} unsupported")
-        for c in fc.flags(result):
-            mark = "⛔" if c["label"] == "unsupported" else "⚠️"
-            print(f"  {mark} [{c['label']}] {c['claim']}")
-            if c.get("note"):
-                print(f"       ↳ {c['note']}")
-        if not fc.flags(result):
-            print("  ✓ no flags — all claims supported")
+    try:
+        service.run_factcheck(args.project_id, source_text, model=(args.model or None))
+    except ValueError as e:
+        print(str(e))
 
 
 def cmd_render(args):
@@ -393,36 +159,21 @@ def cmd_render(args):
 def cmd_approve(args):
     """Gate-2 approve: mark the latest draft approved so the scheduler can drip it."""
     store.init_db()
-    with store.session() as s:
-        draft = _latest_draft(s, args.project_id)
-        if not draft:
-            print(f"no draft for project #{args.project_id}")
-            return
-        draft.status = "approved"
-        s.commit()
-        print(f"project #{args.project_id} draft #{draft.id} approved")
+    from explainer import service
+    try:
+        service.approve_draft(args.project_id)
+    except ValueError as e:
+        print(str(e))
 
 
 def cmd_schedule(args):
     """Schedule a project now, or drip the next ready one (1/day, 06:00 LA)."""
     store.init_db()
-    from explainer import schedule as sch
+    from explainer import service
     try:
-        if args.project_id:
-            res = sch.schedule_project(args.project_id)
-        else:
-            res = sch.tick()
+        service.run_schedule(args.project_id or None)
     except Exception as e:  # noqa: BLE001 — surface the failure to the driver
         print(f"schedule error: {e}")
-        return
-    if not res:
-        print("nothing ready to schedule (need an approved, rendered project)")
-        return
-    print(f"scheduled project #{res['project_id']} for {res['due_at']}")
-    print(f"  media: {res.get('video_url')}")
-    for r in res.get("results", []):
-        ok = "✓" if r.get("ok") else "✗"
-        print(f"  {ok} {r['service']}: {r.get('post_id') or r.get('error')}")
 
 
 def cmd_cache(args):

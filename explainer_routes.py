@@ -135,10 +135,77 @@ def get_postkit(project_id: int):
 
 # --- pipeline stages (job-backed) --------------------------------------------
 
+class ScriptBody(BaseModel):
+    topic_id: int
+    model: str | None = None
+
+
+class ProjectBody(BaseModel):
+    project_id: int
+    model: str | None = None
+
+
+class FactcheckBody(BaseModel):
+    project_id: int
+    source_text: str = ""
+    model: str | None = None
+
+
+class AssetsBody(BaseModel):
+    project_id: int
+    voice: str | None = None
+    tone: str | None = None
+    speed: float = 1.0
+    no_clips: bool = False
+    no_visuals: bool = False
+    ai_visuals: bool = False
+    no_svg: bool = False
+    no_music: bool = False
+
+
 class RenderBody(BaseModel):
     project_id: int
     force: bool = False
     no_wait: bool = False
+
+
+class ScheduleBody(BaseModel):
+    project_id: int | None = None
+
+
+@router.post("/script")
+def post_script(body: ScriptBody):
+    return _launch("script", body.topic_id, service.run_script,
+                   {"topic_id": body.topic_id, "model": body.model})
+
+
+@router.post("/clipfind")
+def post_clipfind(body: ProjectBody):
+    return _launch("clipfind", body.project_id, service.run_clipfind,
+                   {"project_id": body.project_id, "model": body.model})
+
+
+@router.post("/factcheck")
+def post_factcheck(body: FactcheckBody):
+    return _launch("factcheck", body.project_id, service.run_factcheck,
+                   {"project_id": body.project_id, "source_text": body.source_text,
+                    "model": body.model})
+
+
+@router.post("/assets")
+def post_assets(body: AssetsBody):
+    opts = service.AssetOpts(
+        voice=body.voice, tone=body.tone, speed=body.speed,
+        no_clips=body.no_clips, no_visuals=body.no_visuals,
+        ai_visuals=body.ai_visuals, no_svg=body.no_svg, no_music=body.no_music)
+    return _launch("assets", body.project_id, service.run_assets,
+                   {"project_id": body.project_id, "opts": opts})
+
+
+@router.post("/align")
+def post_align(body: ProjectBody):
+    return _launch("align", body.project_id, service.run_align,
+                   {"project_id": body.project_id})
 
 
 @router.post("/render")
@@ -146,6 +213,20 @@ def post_render(body: RenderBody):
     return _launch("render", body.project_id, service.run_render,
                    {"project_id": body.project_id, "force": body.force,
                     "no_wait": body.no_wait})
+
+
+@router.post("/schedule")
+def post_schedule(body: ScheduleBody):
+    return _launch("schedule", body.project_id or 0, service.run_schedule,
+                   {"project_id": body.project_id})
+
+
+@router.post("/drafts/{project_id}/approve")
+def post_approve(project_id: int):
+    try:
+        return service.approve_draft(project_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 # --- content cache -----------------------------------------------------------
