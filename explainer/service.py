@@ -521,14 +521,17 @@ def run_assets(project_id, opts=None, log=print):
         shots = script.get("shots", [])
         topic = s.get(store.Topic, s.get(store.Project, project_id).topic_id)
         sources = (topic.sources if topic else None) or []
-        voice = opts.voice or draft.voice_id or None
 
-        # Mood (draft.script["mood"]) picks the delivery + art direction preset.
+        # Mood (draft.script["mood"]) picks the voice, delivery + art direction.
         from explainer.brand import mood as _mood
         mood_name = script.get("mood")
         m = _mood(mood_name)
         if mood_name and mood_name != "default":
             log(f"  mood: {mood_name}")
+        # Explicit --voice wins, then the draft's own voice, then the mood default.
+        voice = opts.voice or draft.voice_id or m.get("voice") or None
+        # Mood speed applies unless the caller passed a non-default --speed.
+        speed = opts.speed if (opts.speed and opts.speed != 1.0) else (m.get("speed") or 1.0)
         if opts.tone is None:
             tone = m.get("tts_tone") or BRAND.get("tts_tone")
         elif str(opts.tone).strip().lower() in ("", "none", "off", "neutral"):
@@ -613,14 +616,14 @@ def run_assets(project_id, opts=None, log=print):
         log(f"narrating project #{project_id} (voice={voice or 'brand default'}) …")
         if soundbite_paths and audio.has_soundbites(shots):
             _, timeline = audio.assemble(shots, soundbite_paths, narration_path,
-                                         tone=tone, speed=opts.speed,
+                                         tone=tone, speed=speed,
                                          **({"voice": voice} if voice else {}))
             with open(os.path.join(pdir, "timeline.json"), "w", encoding="utf-8") as tf:
                 json.dump(timeline, tf, ensure_ascii=False, indent=2)
             secs = (timeline[-1]["end_ms"] / 1000.0) if timeline else 0.0
             log(f"  assembled narration + {len(soundbite_paths)} soundbite(s) → {secs:.1f}s")
         else:
-            _, secs = tts.narrate(script, narration_path, tone=tone, speed=opts.speed,
+            _, secs = tts.narrate(script, narration_path, tone=tone, speed=speed,
                                   **({"voice": voice} if voice else {}))
             log(f"  narration → {secs:.1f}s")
         manifest["narration_seconds"] = secs

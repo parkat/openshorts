@@ -60,6 +60,8 @@ MOODS = {
     "default": {
         "palette": BRAND["palette"],
         "highlight": "#FFD21E",
+        "voice": BRAND.get("voice"),
+        "speed": 1.0,
         "tts_tone": BRAND["tts_tone"],
         "aid_style": None,          # None = aid.py's standard cream/teal STYLE
         "vhs": BRAND.get("vhs"),
@@ -78,12 +80,13 @@ MOODS = {
             "ink":    "#ECE8E1",   # text (bone white)
         },
         "highlight": "#FFC93C",     # amber — max legibility on dark footage
-        "tts_tone": (
-            "Read like the narrator of a serious investigative documentary delivering a "
-            "grave warning: measured, deliberate and low, unhurried, with weighted pauses "
-            "before the key phrases and cold restraint throughout. No hype, no upspeak, "
-            "no cheerfulness — the gravity comes from control, not volume"
-        ),
+        # Approved by parkat 2026-07-24 after A/B: Charon at 1.08. NOTE the word
+        # "deep" was deliberately REMOVED — pitch words make Gemini drag the vowels
+        # (the same line ran 26.8s with "deep" vs 22.4s without, a 16% slowdown).
+        "voice": "Charon",
+        "speed": 1.08,
+        "tts_tone": ("a strong, persuasive tone warning a serious audience of "
+                     "impending doom"),
         "aid_style": (
             ". Flat 2D vector motion-graphic animation, stark minimal design, solid flat "
             "color fills, crisp sharp edges, heavy dark outlines. Deep near-black charcoal "
