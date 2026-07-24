@@ -35,11 +35,18 @@ def find_vtt(workdir, vid):
 
 
 def ensure_vtt(url, workdir, vid=None):
-    """Return this video's caption VTT path — reuse an on-disk one, else download it."""
+    """Return this video's caption VTT path — reuse an on-disk one (project dir, then
+    the youtube cache), else download it."""
     vid = vid or video_id(url)
     have = find_vtt(workdir, vid) if vid else None
     if have:
         return have
+    if vid:  # reuse the cached full-download's captions (no re-fetch)
+        cached = sorted(glob.glob(os.path.join(
+            os.environ.get("EXPLAINER_CACHE", "cache"), "youtube", vid + "*.vtt")))
+        plain = [c for c in cached if c.endswith(".en.vtt")]
+        if cached:
+            return (plain or cached)[0]
     from explainer.clipfinder import fetch_vtt  # yt-dlp --write-auto-subs, matched by id
     return fetch_vtt(url, workdir, vid)
 

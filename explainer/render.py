@@ -99,7 +99,9 @@ def build_scene_list(alignment, assets=None):
             has_media = any(scene.get(k) for k in ("images", "imageUrl", "videoUrl", "videos"))
             if visual == "accent_clip" and scene.get("videoUrl"):
                 src = shot.get("source")
-                scene["attribution"] = a.get("attribution") or (
+                # A per-shot `speaker` (e.g. "Geoffrey Hinton · Godfather of AI") labels
+                # panel clips; else fall back to the "via <source>" credit.
+                scene["attribution"] = shot.get("speaker") or a.get("attribution") or (
                     f"via {src}" if src and src != "general" else ""
                 )
                 # Soundbite shots let the clip's own audio play (Hinton speaks);

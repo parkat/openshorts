@@ -53,11 +53,32 @@ def has_blocks(flags):
     return any(f["level"] == "block" for f in flags)
 
 
+def _cached_full(url):
+    """Path to a locally cached FULL download of this video (cache/youtube/<id>.mp4),
+    if present — lets us cut many clips from one source with zero extra YouTube fetches
+    (avoids per-clip rate-limiting for panel/multi-clip Shorts)."""
+    vid = tr.video_id(url)
+    if not vid:
+        return None
+    p = os.path.join(os.environ.get("EXPLAINER_CACHE", "cache"), "youtube", vid + ".mp4")
+    return p if os.path.isfile(p) else None
+
+
 def fetch_clip(url, start_s, end_s, out_path):
-    """Download just the [start_s, end_s] window of a YouTube URL via yt-dlp
-    (section download so we don't pull the whole video), re-encoded to a clean
-    9:16-friendly H.264/AAC clip. Returns out_path."""
+    """Get the [start_s, end_s] window of a YouTube URL as a clean H.264/AAC clip.
+    Cuts from a locally cached full download if one exists (no network); otherwise
+    downloads just that section via yt-dlp. Returns out_path."""
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    full = _cached_full(url)
+    if full:
+        dur = max(0.1, float(end_s) - float(start_s))
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-ss", f"{float(start_s):.2f}", "-i", full, "-t", f"{dur:.2f}",
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac",
+             "-movflags", "+faststart", out_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if r.returncode == 0 and os.path.isfile(out_path):
+            return out_path
     section = f"*{float(start_s):.2f}-{float(end_s):.2f}"
     cmd = [
         "yt-dlp", "--no-playlist",
