@@ -40,7 +40,7 @@ export const ExplainerShort: React.FC<Record<string, unknown>> = (rawProps) => {
 
       {/* Layer 2: audio */}
       {narrationUrl && <Audio src={narrationUrl} />}
-      {musicUrl && <Audio src={musicUrl} volume={0.18} />}
+      {musicUrl && <Audio src={musicUrl} volume={0.12} />}
 
       {/* Layer 3: captions */}
       {captions.length > 0 && (
