@@ -11,10 +11,17 @@ def transcribe_audio(video_path):
 
     print(f"🎙️  Transcribing audio from: {video_path}")
 
-    # Run on CPU with INT8 quantization for speed
-    model = WhisperModel("base", device="cpu", compute_type="int8")
+    # Accuracy matters for burned-in captions ("base" hallucinates on real footage).
+    # Prefer a larger model on the GPU; fall back to base/CPU if CUDA isn't available.
+    size = os.environ.get("WHISPER_MODEL", "medium")
+    try:
+        model = WhisperModel(size, device="cuda", compute_type="float16")
+    except Exception:
+        model = WhisperModel(os.environ.get("WHISPER_MODEL_CPU", "base"),
+                             device="cpu", compute_type="int8")
 
-    segments, info = model.transcribe(video_path, word_timestamps=True)
+    segments, info = model.transcribe(video_path, word_timestamps=True,
+                                      vad_filter=True, beam_size=5)
 
     transcript = {
         "segments": [],
