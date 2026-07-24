@@ -82,13 +82,13 @@ MOODS = {
             "ink":    "#ECE8E1",   # text (bone white)
         },
         "highlight": "#FFC93C",     # amber — max legibility on dark footage
-        # Approved by parkat 2026-07-24 after A/B: Charon at 1.08. NOTE the word
-        # "deep" was deliberately REMOVED — pitch words make Gemini drag the vowels
-        # (the same line ran 26.8s with "deep" vs 22.4s without, a 16% slowdown).
+        # Approved by parkat 2026-07-24 after A/B: Charon at 1.08. "deep" + "calm"
+        # are intentional — they slow the read (the same line ran 26.8s with "deep"
+        # vs 22.4s without, ~16%), which is why speed sits at 1.08 to compensate.
         "voice": "Charon",
         "speed": 1.08,
-        "tts_tone": ("a strong, persuasive tone warning a serious audience of "
-                     "impending doom"),
+        "tts_tone": ("a strong, deep, calm, persuasive tone warning a serious "
+                     "audience of impending doom"),
         "aid_style": (
             ". Flat 2D vector motion-graphic animation, stark minimal design, solid flat "
             "color fills, crisp sharp edges, heavy dark outlines. Deep near-black charcoal "

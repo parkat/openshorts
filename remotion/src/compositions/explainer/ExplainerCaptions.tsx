@@ -11,8 +11,9 @@ import type { ExplainerTheme } from "../../lib/explainer-types";
 /**
  * Retention-optimized captions (research-driven): tight word-by-word KARAOKE chunks,
  * big bold sans, the active word color-shifted to the brand accent + a glow (lit
- * slightly early), positioned in the CENTER band — out of the bottom ~25% platform
- * UI zone (like/share/handle/music). Strong outline for legibility over any footage.
+ * slightly early), positioned BELOW the footage in the lower blurred bar — clear of
+ * the clip itself and of the bottom ~20% platform UI zone (like/share/handle/music).
+ * Strong outline for legibility over any footage.
  */
 interface Props {
   captions: CaptionWord[];
@@ -80,7 +81,11 @@ const ChunkView: React.FC<{ words: CaptionWord[]; theme: ExplainerTheme }> = ({
         position: "absolute",
         left: 0,
         right: 0,
-        top: "54%",
+        // Sit in the lower blurred bar, BELOW the footage — a 16:9 clip fit to
+        // width is only 607px tall in a 1920 frame, so it ends at ~66%. Anchoring
+        // the block's centre at 72% clears it while staying above the bottom
+        // ~20% platform UI zone (like/share/handle/music).
+        top: "72%",
         transform: "translateY(-50%)",
         display: "flex",
         justifyContent: "center",
