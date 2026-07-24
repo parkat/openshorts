@@ -179,6 +179,116 @@ def project_detail(project_id):
     return detail
 
 
+# --- topics (manual add + approve) -------------------------------------------
+
+def add_topic(title, summary="", angle="", sources=None, log=print):
+    with store.session() as s:
+        t = store.Topic(title=title, origin="manual", angle=angle or "",
+                        summary=summary or "", sources=sources or [])
+        s.add(t)
+        s.commit()
+        row = topic_dict(t)
+    log(f"added topic #{row['id']}: {title}")
+    return row
+
+
+def list_topics():
+    with store.session() as s:
+        rows = s.query(store.Topic).order_by(store.Topic.created_at.desc()).all()
+        return [topic_dict(t) for t in rows]
+
+
+def approve_topic(topic_id, accent_sources=None, log=print):
+    """Greenlight a topic and (optionally) append accent-clip sources
+    (URLs + in/out timestamps) to its source list."""
+    from sqlalchemy.orm.attributes import flag_modified
+    with store.session() as s:
+        t = s.get(store.Topic, topic_id)
+        if not t:
+            raise ValueError(f"topic #{topic_id} not found")
+        t.status = "approved"
+        if accent_sources:
+            t.sources = (t.sources or []) + list(accent_sources)
+            flag_modified(t, "sources")
+        s.commit()
+        row = topic_dict(t)
+    log(f"approved topic #{topic_id}")
+    return row
+
+
+# --- gate 1: edit the script, resolve flags ----------------------------------
+
+def save_draft_script(project_id, script, log=print):
+    """Persist an edited shot-list/captions back to the latest draft."""
+    with store.session() as s:
+        draft = latest_draft(s, project_id)
+        if not draft:
+            raise ValueError(f"no draft for project #{project_id}")
+        draft.script = script or {}
+        s.commit()
+        did = draft.id
+    log(f"saved script → draft #{did}")
+    return {"project_id": project_id, "draft_id": did}
+
+
+def _flag_matches(fl, target):
+    return (fl.get("code") == target.get("code")
+            and fl.get("clip_index") == target.get("clip_index"))
+
+
+def resolve_flag(project_id, kind, target, log=print):
+    """Gate-1 resolution. kind='clip' removes a guardrail flag from assets.json
+    (an explicit override — after this, render won't block on it). kind='claim'
+    marks a fact-check claim reviewed. `target` is the flag/claim object."""
+    from sqlalchemy.orm.attributes import flag_modified
+    if kind == "clip":
+        apath = os.path.join(proj_dir(project_id), "assets.json")
+        if not os.path.isfile(apath):
+            raise FileNotFoundError("no assets.json — run assets first")
+        with open(apath, encoding="utf-8") as f:
+            man = json.load(f)
+        before = man.get("clip_flags") or []
+        after = [fl for fl in before if not _flag_matches(fl, target)]
+        man["clip_flags"] = after
+        with open(apath, "w", encoding="utf-8") as f:
+            json.dump(man, f, ensure_ascii=False, indent=2)
+        log(f"resolved {len(before) - len(after)} clip flag(s)")
+        return {"removed": len(before) - len(after), "clip_flags": after}
+    if kind == "claim":
+        with store.session() as s:
+            draft = latest_draft(s, project_id)
+            if not draft:
+                raise ValueError(f"no draft for project #{project_id}")
+            fc = draft.factcheck or {}
+            for c in fc.get("claims", []):
+                if c.get("claim") == target.get("claim"):
+                    c["resolved"] = True
+            draft.factcheck = fc
+            flag_modified(draft, "factcheck")
+            s.commit()
+        return {"ok": True}
+    raise ValueError(f"unknown flag kind {kind!r}")
+
+
+def list_schedule():
+    """Scheduled items + recent publish log (scheduler view)."""
+    with store.session() as s:
+        items = (s.query(store.ScheduleItem)
+                 .order_by(store.ScheduleItem.due_at.desc()).all())
+        posts = (s.query(store.Post)
+                 .order_by(store.Post.posted_at.desc()).limit(50).all())
+        return {
+            "scheduled": [{"id": it.id, "project_id": it.project_id,
+                           "platform": it.platform, "status": it.status,
+                           "due_at": it.due_at.isoformat() if it.due_at else None,
+                           "buffer_post_id": it.buffer_post_id or ""} for it in items],
+            "posts": [{"id": p.id, "project_id": p.project_id, "platform": p.platform,
+                       "url": p.url or "", "buffer_post_id": p.buffer_post_id or "",
+                       "posted_at": p.posted_at.isoformat() if p.posted_at else None}
+                      for p in posts],
+        }
+
+
 # --- pipeline stages (shared by CLI + API; log() streams progress) -----------
 
 def run_script(topic_id, model=None, log=print):

@@ -123,6 +123,71 @@ def get_project(project_id: int):
     return detail
 
 
+# --- topics ------------------------------------------------------------------
+
+class TopicBody(BaseModel):
+    title: str
+    summary: str = ""
+    angle: str = ""
+    sources: list = []
+
+
+class ApproveTopicBody(BaseModel):
+    accent_sources: list = []
+
+
+@router.get("/topics")
+def get_topics():
+    return {"topics": service.list_topics()}
+
+
+@router.post("/topics")
+def post_topic(body: TopicBody):
+    if not body.title.strip():
+        raise HTTPException(status_code=400, detail="title required")
+    return service.add_topic(body.title, body.summary, body.angle, body.sources)
+
+
+@router.post("/topics/{topic_id}/approve")
+def post_topic_approve(topic_id: int, body: ApproveTopicBody):
+    try:
+        return service.approve_topic(topic_id, body.accent_sources or None)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+# --- gate 1: edit script + resolve flags -------------------------------------
+
+class ScriptSaveBody(BaseModel):
+    script: dict
+
+
+class ResolveBody(BaseModel):
+    kind: str            # 'clip' | 'claim'
+    target: dict         # the flag/claim object
+
+
+@router.put("/drafts/{project_id}/script")
+def put_draft_script(project_id: int, body: ScriptSaveBody):
+    try:
+        return service.save_draft_script(project_id, body.script)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/flags/{project_id}/resolve")
+def post_resolve_flag(project_id: int, body: ResolveBody):
+    try:
+        return service.resolve_flag(project_id, body.kind, body.target)
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/schedule")
+def get_schedule():
+    return service.list_schedule()
+
+
 @router.get("/projects/{project_id}/postkit")
 def get_postkit(project_id: int):
     detail = service.project_detail(project_id)

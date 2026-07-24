@@ -35,6 +35,18 @@ export const explainerApi = {
   schedule: (id) => postJson('/schedule', { project_id: id }),
   // direct (non-job) actions
   approve: (id) => postJson(`/drafts/${id}/approve`, {}),
+  // topics
+  topics: () => fetch(getApiUrl(`${BASE}/topics`)).then(jsonOrThrow),
+  addTopic: (body) => postJson('/topics', body),
+  approveTopic: (id, accentSources = []) => postJson(`/topics/${id}/approve`, { accent_sources: accentSources }),
+  // gate 1
+  saveScript: (id, script) => fetch(getApiUrl(`${BASE}/drafts/${id}/script`), {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ script }),
+  }).then(jsonOrThrow),
+  resolveFlag: (id, kind, target) => postJson(`/flags/${id}/resolve`, { kind, target }),
+  // scheduler
+  scheduleList: () => fetch(getApiUrl(`${BASE}/schedule`)).then(jsonOrThrow),
 };
 
 // Project.status → tailwind tint. Mirrors the pipeline state machine.

@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { FlaskConical, ListVideo, Database } from 'lucide-react';
+import { FlaskConical, ListVideo, Database, PlusCircle, Calendar } from 'lucide-react';
 import ExplainerQueue from './ExplainerQueue';
 import ProjectStudio from './ProjectStudio';
+import TopicForm from './TopicForm';
+import ScheduleView from './ScheduleView';
 
 // Container for the explainer lane. Owns which sub-view is active and, when in
 // the studio, which project. Kept out of App.jsx (already huge); all explainer
@@ -39,6 +41,8 @@ export default function ExplainerTab() {
         </div>
         <div className="flex items-center gap-2">
           <NavBtn id="queue" icon={ListVideo} label="Queue" />
+          <NavBtn id="topics" icon={PlusCircle} label="Topics" />
+          <NavBtn id="schedule" icon={Calendar} label="Schedule" />
           <NavBtn id="cache" icon={Database} label="Cache" />
         </div>
       </div>
@@ -46,6 +50,8 @@ export default function ExplainerTab() {
       {/* Body */}
       <div className="flex-1 overflow-y-auto custom-scrollbar">
         {view === 'queue' && <ExplainerQueue onOpen={openStudio} />}
+        {view === 'topics' && <TopicForm onProjectCreated={openStudio} />}
+        {view === 'schedule' && <ScheduleView />}
         {view === 'studio' && (
           <ProjectStudio projectId={selectedId} onBack={() => setView('queue')} />
         )}

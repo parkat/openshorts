@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, RotateCcw, Copy, Check, AlertTriangle, Film } from 'lucide-react';
+import { ArrowLeft, RotateCcw, Copy, Check, AlertTriangle, Film, Pencil, Save, X, Loader2 } from 'lucide-react';
 import { explainerApi, STATUS_TINT, getApiUrl } from './api';
 import StageBar from './StageBar';
 
@@ -19,14 +19,24 @@ function CopyBtn({ text }) {
   );
 }
 
-function Flag({ f }) {
+function Flag({ f, onResolve }) {
   const block = f.level === 'block';
+  const [busy, setBusy] = useState(false);
   return (
     <div className={`flex items-start gap-2 text-xs p-2.5 rounded-lg ${block ? 'bg-red-500/10 text-red-300' : 'bg-amber-500/10 text-amber-300'}`}>
       <span className="shrink-0">{block ? '⛔' : '⚠️'}</span>
-      <div>
+      <div className="flex-1">
         <span className="font-mono opacity-70">{f.code}</span> — {f.message}
       </div>
+      {onResolve && (
+        <button
+          onClick={async () => { setBusy(true); try { await onResolve(f); } finally { setBusy(false); } }}
+          disabled={busy}
+          className="shrink-0 px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80 transition-colors"
+        >
+          {busy ? '…' : 'Override'}
+        </button>
+      )}
     </div>
   );
 }
@@ -36,6 +46,10 @@ export default function ProjectStudio({ projectId, onBack }) {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [scriptText, setScriptText] = useState('');
+  const [saveErr, setSaveErr] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -49,7 +63,34 @@ export default function ProjectStudio({ projectId, onBack }) {
     }
   };
 
-  useEffect(() => { load(); }, [projectId]);
+  useEffect(() => { load(); setEditing(false); }, [projectId]);
+
+  const resolveFlag = async (f) => {
+    await explainerApi.resolveFlag(projectId, 'clip', f);
+    await load();
+  };
+
+  const startEdit = () => {
+    setScriptText(JSON.stringify(detail?.draft?.script || {}, null, 2));
+    setSaveErr(null);
+    setEditing(true);
+  };
+
+  const saveScript = async () => {
+    let parsed;
+    try { parsed = JSON.parse(scriptText); } catch { setSaveErr('Invalid JSON'); return; }
+    setSaving(true);
+    setSaveErr(null);
+    try {
+      await explainerApi.saveScript(projectId, parsed);
+      setEditing(false);
+      await load();
+    } catch (e) {
+      setSaveErr(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const project = detail?.project;
   const script = detail?.draft?.script || {};
@@ -119,8 +160,8 @@ export default function ProjectStudio({ projectId, onBack }) {
 
               {flags.length > 0 && (
                 <div className="glass-panel p-4 space-y-2">
-                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">Guardrail flags</h3>
-                  {flags.map((f, i) => <Flag key={i} f={f} />)}
+                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">Guardrail flags (gate 1)</h3>
+                  {flags.map((f, i) => <Flag key={i} f={f} onResolve={resolveFlag} />)}
                 </div>
               )}
 
@@ -140,9 +181,37 @@ export default function ProjectStudio({ projectId, onBack }) {
             {/* Right: shot list + post kit */}
             <div className="space-y-6">
               <div className="glass-panel p-4">
-                <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">
-                  Shot list {shots.length ? `(${shots.length})` : ''}
-                </h3>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+                    Shot list {shots.length ? `(${shots.length})` : ''}
+                  </h3>
+                  {!editing ? (
+                    <button onClick={startEdit} className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-cyan-400 transition-colors">
+                      <Pencil size={13} /> Edit
+                    </button>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => setEditing(false)} className="flex items-center gap-1 text-xs text-zinc-400 hover:text-white"><X size={13} /> Cancel</button>
+                      <button onClick={saveScript} disabled={saving} className="flex items-center gap-1 text-xs text-cyan-300 hover:text-cyan-200">
+                        {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />} Save
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {editing ? (
+                  <>
+                    {saveErr && <p className="text-xs text-red-300 mb-2 flex items-center gap-1.5"><AlertTriangle size={12} /> {saveErr}</p>}
+                    <textarea
+                      value={scriptText}
+                      onChange={(e) => setScriptText(e.target.value)}
+                      spellCheck={false}
+                      className="input-field w-full h-[28rem] resize-none font-mono text-[11px] leading-relaxed"
+                    />
+                    <p className="text-[10px] text-zinc-600 mt-1">Editing the raw script JSON. Save writes it back to the draft; re-run Assets → Align → Render to apply.</p>
+                  </>
+                ) : (
+                <>
                 {script.hook && (
                   <p className="text-sm text-cyan-300 italic mb-3 leading-snug">“{script.hook}”</p>
                 )}
@@ -161,6 +230,8 @@ export default function ProjectStudio({ projectId, onBack }) {
                   ))}
                   {shots.length === 0 && <p className="text-zinc-600 text-sm">No script yet.</p>}
                 </div>
+                </>
+                )}
               </div>
 
               {kit && (
