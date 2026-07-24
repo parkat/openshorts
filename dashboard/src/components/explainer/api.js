@@ -24,6 +24,11 @@ export const explainerApi = {
   project: (id) => fetch(getApiUrl(`${BASE}/projects/${id}`)).then(jsonOrThrow),
   postkit: (id) => fetch(getApiUrl(`${BASE}/projects/${id}/postkit`)).then(jsonOrThrow),
   cacheStats: () => fetch(getApiUrl(`${BASE}/cache/stats`)).then(jsonOrThrow),
+  cacheItems: (params = {}) => {
+    const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString();
+    return fetch(getApiUrl(`${BASE}/cache/items${q ? `?${q}` : ''}`)).then(jsonOrThrow);
+  },
+  cacheDelete: (id) => fetch(getApiUrl(`${BASE}/cache/items/${id}`), { method: 'DELETE' }).then(jsonOrThrow),
   job: (jobId) => fetch(getApiUrl(`${BASE}/jobs/${jobId}`)).then(jsonOrThrow),
   // stage runners → { job_id }
   script: (topicId, opts = {}) => postJson('/script', { topic_id: topicId, ...opts }),

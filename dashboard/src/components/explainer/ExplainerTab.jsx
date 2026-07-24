@@ -4,6 +4,7 @@ import ExplainerQueue from './ExplainerQueue';
 import ProjectStudio from './ProjectStudio';
 import TopicForm from './TopicForm';
 import ScheduleView from './ScheduleView';
+import CacheExplorer from './CacheExplorer';
 
 // Container for the explainer lane. Owns which sub-view is active and, when in
 // the studio, which project. Kept out of App.jsx (already huge); all explainer
@@ -55,9 +56,7 @@ export default function ExplainerTab() {
         {view === 'studio' && (
           <ProjectStudio projectId={selectedId} onBack={() => setView('queue')} />
         )}
-        {view === 'cache' && (
-          <div className="p-6 md:p-10 text-zinc-500 text-sm">Cache explorer — coming in a later build step.</div>
-        )}
+        {view === 'cache' && <CacheExplorer />}
       </div>
     </div>
   );

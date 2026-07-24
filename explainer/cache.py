@@ -175,6 +175,30 @@ def find(kind=None, label=None, text=None, limit=200, session=None):
             session.close()
 
 
+def delete(item_id, session=None):
+    """Remove a cache row and unlink its file. Returns True if a row was deleted.
+    Rows are 1:1 with files here (put() dedupes by ref_key/sha), so a straight
+    unlink is safe. Backs the dashboard cache explorer's delete action."""
+    own = session is None
+    session = session or store.session()
+    try:
+        row = session.get(store.CacheItem, item_id)
+        if not row:
+            return False
+        p = os.path.join(CACHE_DIR, row.path or "")
+        try:
+            if row.path and os.path.isfile(p):
+                os.remove(p)
+        except OSError:
+            pass  # DB row still goes; a stale file is harmless
+        session.delete(row)
+        session.commit()
+        return True
+    finally:
+        if own:
+            session.close()
+
+
 def stats(session=None):
     """Counts + bytes per kind and totals — for a dashboard cache-size readout."""
     own = session is None

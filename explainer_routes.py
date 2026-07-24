@@ -300,3 +300,20 @@ def post_approve(project_id: int):
 def get_cache_stats():
     """Per-kind counts/bytes/reuses + totals for the cache-size readout."""
     return cache_mod.stats()
+
+
+@router.get("/cache/items")
+def get_cache_items(kind: str | None = None, label: str | None = None,
+                    text: str | None = None):
+    """Browse cache rows (filter by kind/label/substring), newest first."""
+    with store.session() as s:
+        rows = cache_mod.find(kind=kind or None, label=label or None,
+                              text=text or None, session=s)
+        return {"items": [service.cache_item_dict(r) for r in rows]}
+
+
+@router.delete("/cache/items/{item_id}")
+def delete_cache_item(item_id: int):
+    if not cache_mod.delete(item_id):
+        raise HTTPException(status_code=404, detail="cache item not found")
+    return {"ok": True}
