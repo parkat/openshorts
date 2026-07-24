@@ -446,7 +446,9 @@ function App() {
 
   const handleProcess = async (data) => {
     const needsGemini = (data.clipMode || 'viral') !== 'split';
-    if ((needsGemini && !apiKey) || !uploadPostKey) {
+    // Publishing goes through Buffer now, so the Upload-Post key is optional
+    // (only the Thumbnail/SaaS flows use it). Only gate on Gemini for viral mode.
+    if (needsGemini && !apiKey) {
       setShowKeyModal(true);
       return;
     }
@@ -645,36 +647,28 @@ function App() {
               />
             )}
 
-            {(!apiKey || !uploadPostKey) && (
+            {!apiKey && (
               <button
                 onClick={() => setActiveTab('settings')}
                 className="text-xs text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 px-3 py-1 rounded-full border border-amber-500/30 transition-colors flex items-center gap-1.5"
                 title="Click to configure your API keys"
               >
                 <AlertTriangle size={12} />
-                {!apiKey && !uploadPostKey
-                  ? 'Gemini & Upload-Post keys missing'
-                  : !apiKey
-                    ? 'Gemini API Key Missing'
-                    : 'Upload-Post API Key Missing'}
+                Gemini API Key Missing
               </button>
             )}
           </div>
         </header>
 
         {/* Persistent Missing Keys Banner — visible on every screen */}
-        {(!apiKey || !uploadPostKey) && activeTab !== 'settings' && (
+        {!apiKey && activeTab !== 'settings' && (
           <div className="mx-6 mt-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center justify-between gap-4 shrink-0 animate-[fadeIn_0.3s_ease-out]">
             <div className="flex items-center gap-3 text-sm text-amber-200">
               <KeyRound size={16} className="shrink-0 text-amber-400" />
               <div>
-                <span className="font-semibold">Required API keys missing.</span>{' '}
+                <span className="font-semibold">Gemini API key missing.</span>{' '}
                 <span className="text-amber-200/80">
-                  {!apiKey && !uploadPostKey
-                    ? 'Set your Gemini and Upload-Post API keys to use OpenShorts.'
-                    : !apiKey
-                      ? 'Set your Gemini API key to use OpenShorts.'
-                      : 'Set your Upload-Post API key to use OpenShorts.'}
+                  Set your Gemini API key to use AI clip detection.
                 </span>
               </div>
             </div>
@@ -715,14 +709,14 @@ function App() {
               </div>
               <KeyInput onKeySet={setApiKey} savedKey={apiKey} />
 
-              <div className={`glass-panel p-6 mt-8 ${!uploadPostKey ? 'border-amber-500/30 ring-1 ring-amber-500/20' : ''}`}>
+              <div className="glass-panel p-6 mt-8">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-lg font-semibold">Social Integration</h2>
-                  <span className="text-[10px] bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded text-amber-400 uppercase tracking-wider">Required</span>
+                  <span className="text-[10px] bg-white/5 border border-white/10 px-2 py-0.5 rounded text-zinc-400 uppercase tracking-wider">Optional</span>
                 </div>
                 <p className="text-xs text-zinc-500 mb-6 leading-relaxed">
-                  Required to publish your clips to TikTok, Instagram Reels, and YouTube Shorts via <strong>Upload-Post</strong>.
-                  Includes a <strong>free tier</strong> (no credit card required).
+                  Optional — publishing now runs through <strong>Buffer</strong>. An <strong>Upload-Post</strong> key
+                  is only needed for the legacy Thumbnail/UGC one-click publish flows. Leave it blank if you don't use those.
                 </p>
                 <div className="space-y-4">
                   <label className="block text-sm text-zinc-400">Upload-Post API Key</label>
@@ -1192,15 +1186,9 @@ function App() {
       {showKeyModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowKeyModal(false)}>
           <div className="bg-[#18181b] border border-white/10 rounded-2xl p-6 max-w-md w-full mx-4 space-y-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-lg font-bold text-white">
-              {!apiKey && !uploadPostKey
-                ? 'Required API Keys Missing'
-                : !apiKey
-                  ? 'Gemini API Key Required'
-                  : 'Upload-Post API Key Required'}
-            </h2>
+            <h2 className="text-lg font-bold text-white">Gemini API Key Required</h2>
             <p className="text-sm text-zinc-400">
-              OpenShorts needs both a <strong className="text-zinc-200">Gemini</strong> API key and an <strong className="text-zinc-200">Upload-Post</strong> API key. Both have free tiers.
+              OpenShorts needs a <strong className="text-zinc-200">Gemini</strong> API key for AI clip detection. It has a free tier.
             </p>
 
             {/* Gemini block */}
@@ -1224,37 +1212,6 @@ function App() {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && e.target.value.trim()) {
                         setApiKey(e.target.value.trim());
-                      }
-                    }}
-                  />
-                </>
-              )}
-            </div>
-
-            {/* Upload-Post block */}
-            <div className={`rounded-lg p-4 space-y-2 border ${!uploadPostKey ? 'bg-violet-500/5 border-violet-500/30' : 'bg-white/5 border-white/10 opacity-70'}`}>
-              <p className="text-xs font-semibold text-zinc-200 flex items-center gap-2">
-                {uploadPostKey ? <Check size={12} className="text-green-400" /> : <AlertTriangle size={12} className="text-amber-400" />}
-                Upload-Post API Key {uploadPostKey && <span className="text-green-400">— set</span>}
-              </p>
-              {!uploadPostKey && (
-                <>
-                  <p className="text-xs text-zinc-400">
-                    Required to publish your clips to TikTok, Instagram Reels, and YouTube Shorts. Free tier available, no credit card needed.
-                  </p>
-                  <ol className="text-xs text-zinc-400 space-y-1 list-decimal list-inside">
-                    <li>Register at <a href="https://app.upload-post.com/login" target="_blank" rel="noopener noreferrer" className="text-violet-400 underline">app.upload-post.com</a></li>
-                    <li>Connect your TikTok, Instagram, or YouTube accounts</li>
-                    <li>Go to <a href="https://app.upload-post.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-violet-400 underline">API Keys</a> and generate one</li>
-                    <li>Paste it below</li>
-                  </ol>
-                  <input
-                    type="text"
-                    placeholder="Paste your Upload-Post API key here..."
-                    className="w-full bg-black/50 border border-white/20 rounded-lg px-4 py-2.5 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-violet-500"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && e.target.value.trim()) {
-                        setUploadPostKey(e.target.value.trim());
                       }
                     }}
                   />
