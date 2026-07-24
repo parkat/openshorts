@@ -91,8 +91,10 @@ function sceneVideos(scene: ExplainerScene): string[] {
   return [];
 }
 
-/** One stock clip, full-bleed with a gentle push-in (natural footage motion). */
-const VideoClip: React.FC<{ src: string }> = ({ src }) => {
+/** One stock clip, full-bleed with a gentle push-in (natural footage motion).
+ * `loop` replays short footage instead of holding a frozen last frame — generated
+ * aid clips are a fixed 4-8s but a narrated beat can run longer. */
+const VideoClip: React.FC<{ src: string; loop?: boolean }> = ({ src, loop }) => {
   const frame = useCurrentFrame();
   const { durationInFrames } = useVideoConfig();
   const t = interpolate(frame, [0, Math.max(1, durationInFrames)], [0, 1], {
@@ -102,6 +104,7 @@ const VideoClip: React.FC<{ src: string }> = ({ src }) => {
     <OffthreadVideo
       src={src}
       muted
+      loop={loop}
       style={{
         width: "100%",
         height: "100%",
@@ -126,9 +129,11 @@ const StockVideo: React.FC<{ videos: string[] }> = ({ videos }) => {
 };
 
 /** Generated explanatory AID clips — staged clips play in sequence (progression),
- * each an equal slice; muted (audio is the narrator or the speaker's soundbite). */
+ * each an equal slice; muted (audio is the narrator or the speaker's soundbite).
+ * Looped: an aid is a fixed 4-8s render but the beat it covers is set by the
+ * narration, so without this the shot holds a frozen frame for the remainder. */
 const AidSequence: React.FC<{ videos: string[] }> = ({ videos }) => (
-  <Sequential count={videos.length} render={(i) => <VideoClip src={videos[i]} />} />
+  <Sequential count={videos.length} render={(i) => <VideoClip src={videos[i]} loop />} />
 );
 
 /** Generated stills — hold with a gentle Ken Burns pan/zoom; multiple stills play

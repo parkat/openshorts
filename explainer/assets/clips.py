@@ -87,6 +87,12 @@ def fetch_clip(url, start_s, end_s, out_path):
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     full = _cached_full(url)
     if full:
+        # Windows chosen from a transcript (esp. lossy auto-captions) routinely land
+        # mid-word. Re-listen around the request and move each cut to a real speech
+        # boundary. Only on the cached-full path — it needs the surrounding audio.
+        if os.environ.get("EXPLAINER_SNAP", "1") != "0":
+            from explainer.assets.snap import snap_window
+            start_s, end_s = snap_window(full, start_s, end_s)
         dur = max(0.1, float(end_s) - float(start_s))
         r = subprocess.run(
             ["ffmpeg", "-y", "-ss", f"{float(start_s):.2f}", "-i", full, "-t", f"{dur:.2f}",

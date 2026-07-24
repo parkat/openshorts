@@ -20,7 +20,26 @@ from explainer.assets import svg as _svg   # reuse its keyword extractor for lab
 
 AID_SHOT = "aid"
 SIZE = "720x1280"          # vertical 9:16 (per parkat)
-DURATION = 4              # <=5s per clip; Veo 3.1 Lite supports 4/6/8 (see openrouter_client)
+DURATION = 4               # fallback; Veo supports 4/6/8s (see openrouter_client)
+DURATIONS = (4, 6, 8)      # selectable renders, ascending
+
+
+def _duration_for(shot, n_clips):
+    """Pick the shortest supported Veo duration that covers this clip's share of
+    the beat. The script's `seconds` is an estimate and the real narration usually
+    runs longer, so we bias up a little; the render also loops the clip, so a small
+    under-shoot is cosmetic rather than a frozen frame."""
+    try:
+        beat = float(shot.get("seconds") or 0)
+    except (TypeError, ValueError):
+        beat = 0.0
+    if beat <= 0:
+        return DURATION
+    per_clip = (beat / max(1, n_clips)) * 1.25   # +25% headroom for a slower read
+    for d in DURATIONS:
+        if d >= per_clip:
+            return d
+    return DURATIONS[-1]
 
 # Brand style anchor (Veo prompting guide): name the medium up front, lock a LIMITED
 # palette, and push against Veo's photoreal/gradient default with explicit flat-vector
@@ -110,18 +129,19 @@ def generate_aids(shots, out_dir, key=None, log=print, style=None):
                 continue  # already in this project
             stage = f" Show {STAGES[j]}." if n > 1 else ""
             prompt = note + stage + style
-            rk = cache.ref_for_video(orc.VIDEO_MODEL, prompt, SIZE, DURATION)
+            secs = _duration_for(shot, n)
+            rk = cache.ref_for_video(orc.VIDEO_MODEL, prompt, SIZE, secs)
             hit = cache.reuse(rk)
             if hit and cache.materialize(hit, out):
                 log(f"  aid {i}.{j} <- cache reuse (no OpenRouter spend)")
                 continue
             try:
-                res = orc.generate_video(prompt, out, size=SIZE, duration=DURATION,
+                res = orc.generate_video(prompt, out, size=SIZE, duration=secs,
                                          negative_prompt=NEGATIVE, key=key)
                 cost += res.get("cost") or 0.0
                 made += 1
                 cache.put("video", out, ref_key=rk, source=prompt, model=orc.VIDEO_MODEL,
-                          size=SIZE, duration_s=DURATION, labels=labels,
+                          size=SIZE, duration_s=secs, labels=labels,
                           meta={"cost": res.get("cost"), "shot": i})
                 log(f"  aid {i}.{j} -> {os.path.basename(out)} (${res.get('cost')})")
             except Exception as e:  # noqa: BLE001 — one failed clip shouldn't abort
