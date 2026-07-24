@@ -32,31 +32,52 @@ def _tz():
     return ZoneInfo(BRAND.get("timezone", "America/Los_Angeles"))
 
 
-def _publish_hm():
-    hh, mm = (BRAND.get("publish_time", "06:00").split(":") + ["0"])[:2]
-    return int(hh), int(mm)
+def _publish_times():
+    """The brand's daily publish slots as [(hh, mm), ...], earliest first.
+    `publish_times` (list) wins; falls back to the legacy single `publish_time`."""
+    raw = BRAND.get("publish_times") or [BRAND.get("publish_time", "06:00")]
+    out = []
+    for t in raw:
+        hh, mm = (str(t).split(":") + ["0"])[:2]
+        out.append((int(hh), int(mm)))
+    return sorted(set(out))
 
 
-def next_slot(taken_dates, now=None):
-    """Next 06:00-LA datetime (tz-aware) whose *date* isn't already taken.
+def next_slot(taken_slots, now=None):
+    """Next free publish slot (tz-aware) in the brand timezone.
 
-    `taken_dates`: iterable of `date` objects already scheduled. `now`: tz-aware
-    datetime (defaults to now in the brand tz) — injectable for tests.
+    Supports N slots per day (e.g. 04:00 + 17:00): walks forward through
+    day x slot-time and returns the first candidate that is in the future and
+    not already taken.
+
+    `taken_slots`: iterable of datetimes already scheduled — tz-aware, or naive
+    which is read as UTC (that's how ScheduleItem.due_at is persisted). `now`:
+    tz-aware datetime, injectable for tests.
     """
     tz = _tz()
     now = now or datetime.datetime.now(tz)
     if now.tzinfo is None:
         now = now.replace(tzinfo=tz)
     now = now.astimezone(tz)
-    hh, mm = _publish_hm()
-    taken = set(taken_dates or [])
 
-    cand = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-    if cand <= now:
-        cand += datetime.timedelta(days=1)
-    while cand.date() in taken:
-        cand += datetime.timedelta(days=1)
-    return cand
+    taken = set()
+    for d in (taken_slots or []):
+        if d is None:
+            continue
+        if isinstance(d, datetime.datetime):
+            if d.tzinfo is None:                      # stored naive-UTC
+                d = d.replace(tzinfo=datetime.timezone.utc)
+            taken.add(d.astimezone(tz).replace(second=0, microsecond=0))
+
+    times = _publish_times()
+    for day_offset in range(0, 120):
+        day = (now + datetime.timedelta(days=day_offset)).date()
+        for hh, mm in times:
+            cand = datetime.datetime(day.year, day.month, day.day, hh, mm, tzinfo=tz)
+            if cand <= now or cand in taken:
+                continue
+            return cand
+    raise RuntimeError("no free publish slot in the next 120 days")
 
 
 def _credits(script):
@@ -164,8 +185,11 @@ def schedule_project(project_id, s=None, now=None, backend_url=None):
         if not filename:
             raise ValueError(f"project #{project_id} has no render yet")
 
-        taken = {d for (d,) in s.query(store.ScheduleItem.due_at).all() if d}
-        slot = next_slot({d.date() for d in taken}, now=now)
+        # Only live rows hold a slot — cancelled/failed ones free theirs back up.
+        taken = [d for (d, st) in s.query(store.ScheduleItem.due_at,
+                                          store.ScheduleItem.status).all()
+                 if d and st in ("queued", "posted")]
+        slot = next_slot(taken, now=now)
         due_iso = slot.isoformat()
 
         channels = match_channels(_get_channels(backend_url))

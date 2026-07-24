@@ -13,8 +13,10 @@ BRAND = {
         "instagram": "user15725355",
     },
 
-    # Publishing cadence — 1/day.
-    "publish_time": "06:00",           # local wall-clock
+    # Publishing cadence — 2/day (parkat, 2026-07-24): early-morning + evening
+    # commute slots. Wall-clock in `timezone`, so it tracks PST/PDT automatically.
+    "publish_times": ["04:00", "17:00"],
+    "publish_time": "04:00",           # legacy single-slot fallback
     "timezone": "America/Los_Angeles",
 
     # 80s retro-TV / VHS, muted + flat.
