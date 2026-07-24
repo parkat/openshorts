@@ -11,6 +11,7 @@ OpenShorts is an AI-powered vertical video generator that transforms long YouTub
 - **Publishing = Buffer** for the main Post flow (`buffer_client.py`, `/api/buffer/*`), with clips hosted publicly for Buffer to fetch via **`media.parkat.us/m/<token>`** (no Access). Upload-Post remains for the Thumbnail/SaaS flows only.
 - **`OPENROUTER`** (one key: LLM/image/video/TTS via `openrouter_client.py`) and **`BUFFER`** live server-side in `openshorts/.env`.
 - **`HANDOFF-explainer-pipeline.md`** (repo root) is the source of truth for the new **Explainer lane** build (SQLite store, `explainer/` package, CLI + dashboard drivers). Read its §0 reconciliation first.
+- **`OPERATING.md`** (repo root) — how to actually reach and drive the box (SSH paths, deploy commands, gotchas). **Read it before running anything against the deployment.**
 
 ## Development Commands
 
