@@ -26,6 +26,7 @@ output/
 
 # Secrets
 .env
+*.env
 
 # Generated metadata
 *_metadata.json
