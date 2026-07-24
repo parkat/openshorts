@@ -41,7 +41,7 @@ BRAND = {
     # directive prepended as "<tone>: <text>" (the model styles delivery without
     # speaking the directive). Verified to beat the OpenAI-style `instructions`
     # field. Per-run override via `assets --tone`; per-shot via shot["tone"].
-    "tts_tone": "Read aloud quickly in a deep professional Narrators voice",
+    "tts_tone": "Read like a top science-explainer YouTuber hooking a viewer: confident, punchy, fast-paced and energetic, with strong emphasis on the key words and a sense of intrigue and urgency",
     # Subtle VHS treatment on the Remotion composite (kept tasteful, not gimmicky).
     "vhs": {"scanlines": True, "grain": "light", "chroma_wobble": "subtle"},
 
