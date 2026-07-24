@@ -357,6 +357,48 @@ def resolve_flag(project_id, kind, target, log=print):
     raise ValueError(f"unknown flag kind {kind!r}")
 
 
+def cancel_scheduled(item_id, log=print):
+    """Pull a queued post back out of Buffer and mark the ScheduleItem cancelled.
+    Safe to call on an item with no buffer_post_id (just marks it locally)."""
+    import os
+    import buffer_client
+    with store.session() as s:
+        it = s.get(store.ScheduleItem, item_id)
+        if not it:
+            raise ValueError(f"schedule item #{item_id} not found")
+        bpid = (it.buffer_post_id or "").strip()
+        if bpid:
+            key = os.environ.get("BUFFER")
+            if not key:
+                raise ValueError("no BUFFER key on the server")
+            buffer_client.delete_post(key, bpid)
+            log(f"removed Buffer post {bpid}")
+        it.status = "cancelled"
+        # Drop the matching Post row (it never went live).
+        for p in (s.query(store.Post)
+                  .filter(store.Post.buffer_post_id == bpid).all() if bpid else []):
+            s.delete(p)
+        s.commit()
+    log(f"cancelled schedule item #{item_id}")
+    return {"ok": True, "id": item_id, "status": "cancelled"}
+
+
+def clear_failed_schedule(project_id=None, log=print):
+    """Remove stale `failed` schedule rows (e.g. from before media hosting worked)
+    so the queue view reflects reality. Returns how many were dropped."""
+    with store.session() as s:
+        q = s.query(store.ScheduleItem).filter(store.ScheduleItem.status == "failed")
+        if project_id is not None:
+            q = q.filter(store.ScheduleItem.project_id == project_id)
+        rows = q.all()
+        n = len(rows)
+        for r in rows:
+            s.delete(r)
+        s.commit()
+    log(f"cleared {n} failed schedule row(s)")
+    return {"cleared": n}
+
+
 def list_schedule():
     """Scheduled items + recent publish log (scheduler view)."""
     with store.session() as s:

@@ -188,6 +188,22 @@ def get_schedule():
     return service.list_schedule()
 
 
+@router.delete("/schedule/{item_id}")
+def delete_scheduled(item_id: int):
+    """Cancel a queued post (pulls it out of Buffer too)."""
+    try:
+        return service.cancel_scheduled(item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:  # noqa: BLE001 — surface Buffer errors to the UI
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/schedule/clear-failed")
+def post_clear_failed(project_id: int | None = None):
+    return service.clear_failed_schedule(project_id)
+
+
 @router.get("/projects/{project_id}/postkit")
 def get_postkit(project_id: int):
     detail = service.project_detail(project_id)

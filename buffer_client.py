@@ -104,3 +104,25 @@ def create_video_post(api_key, channel_id, service, text, video_url,
     if result.get("__typename") != "PostActionSuccess":
         raise BufferError(result.get("message") or "Buffer rejected the post")
     return result.get("post") or {}
+
+
+# deletePost returns a UNION of DeletePostSuccess | VoidMutationError, and
+# DeletePostSuccess exposes no selectable fields — so we only spread the error
+# type and read __typename.
+DELETE_POST = """
+mutation($id: PostId!) {
+  deletePost(input: {id: $id}) {
+    __typename
+    ... on VoidMutationError { message }
+  }
+}
+"""
+
+
+def delete_post(api_key, post_id):
+    """Cancel/remove a queued Buffer post. Returns True on success."""
+    d = _gql(api_key, DELETE_POST, {"id": post_id})
+    result = d.get("deletePost") or {}
+    if result.get("__typename") != "DeletePostSuccess":
+        raise BufferError(result.get("message") or "Buffer rejected the delete")
+    return True

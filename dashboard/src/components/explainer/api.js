@@ -52,6 +52,8 @@ export const explainerApi = {
   resolveFlag: (id, kind, target) => postJson(`/flags/${id}/resolve`, { kind, target }),
   // scheduler
   scheduleList: () => fetch(getApiUrl(`${BASE}/schedule`)).then(jsonOrThrow),
+  cancelScheduled: (itemId) => fetch(getApiUrl(`${BASE}/schedule/${itemId}`), { method: 'DELETE' }).then(jsonOrThrow),
+  clearFailedSchedule: () => postJson('/schedule/clear-failed', {}),
   // reject + learn
   reject: (id, reason, tags = []) => postJson(`/projects/${id}/reject`, { reason, tags }),
   feedback: (params = {}) => {
