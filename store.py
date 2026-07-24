@@ -102,6 +102,22 @@ class Voice(Base):
     retention = Column(Float, default=0.0)     # A/B signal
 
 
+class Feedback(Base):
+    """Reviewer verdict on a rendered project — a rejection with a reason (and
+    optional category tags). Fed forward into the NEXT script generation for the
+    topic so the pipeline learns from what got rejected. See explainer/service.py
+    (reject_project / feedback_guidance)."""
+    __tablename__ = "feedback"
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"))
+    topic_id = Column(Integer, ForeignKey("topics.id"))
+    draft_id = Column(Integer, ForeignKey("drafts.id"))
+    verdict = Column(String, default="rejected")  # rejected (approved handled by Draft.status)
+    reason = Column(Text, default="")             # free-text: why it was rejected
+    tags = Column(JSON, default=list)             # ["hook","pacing","captions","visuals","audio",...]
+    created_at = Column(DateTime, default=_now)
+
+
 class CacheItem(Base):
     """Persistent, labeled, enriched content cache — reuse transcripts, generated
     videos/images, YouTube downloads, accent clips, and SVGs across videos. Files are

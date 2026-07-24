@@ -88,7 +88,7 @@ Return ONLY valid JSON (no markdown, no prose) matching exactly:
 }"""
 
 
-def _user_prompt(title, summary, sources):
+def _user_prompt(title, summary, sources, guidance=""):
     if sources:
         src_lines = "\n".join(
             f"- [{s.get('label') or s.get('type', 'source')}] {s.get('url', '')} {s.get('note', '')}".rstrip()
@@ -96,10 +96,14 @@ def _user_prompt(title, summary, sources):
         )
     else:
         src_lines = '(none — draft from general knowledge; mark factual lines source: "general")'
+    # A prior version may have been rejected; fold the reviewer's reasons in so the
+    # writer fixes them explicitly this time.
+    guidance_block = f"\n{guidance.strip()}\n" if guidance and guidance.strip() else ""
     return (
         f"TOPIC: {title}\n\n"
         f"SUMMARY / ANGLE: {summary or '(none — use your knowledge, stay accurate)'}\n\n"
-        f"SOURCES (cite these as `source` labels):\n{src_lines}\n\n"
+        f"SOURCES (cite these as `source` labels):\n{src_lines}\n"
+        f"{guidance_block}\n"
         "Write the Short now. JSON only."
     )
 
@@ -114,18 +118,19 @@ def _extract_json(text):
     return json.loads(m.group(0))
 
 
-def generate_script(title, summary="", sources=None, model=None, key=None):
-    """Return the shot-list dict for a topic via OpenRouter."""
+def generate_script(title, summary="", sources=None, model=None, key=None, guidance=""):
+    """Return the shot-list dict for a topic via OpenRouter. `guidance` folds in
+    lessons from any rejected prior version so the writer avoids repeating them."""
     messages = [
         {"role": "system", "content": SYSTEM},
-        {"role": "user", "content": _user_prompt(title, summary, sources or [])},
+        {"role": "user", "content": _user_prompt(title, summary, sources or [], guidance)},
     ]
     out = orc.chat(messages, model=model or orc.MODELS["polish"],
                    temperature=0.8, max_tokens=3000, key=key)
     return _extract_json(out)
 
 
-def manual_prompt(title, summary="", sources=None):
+def manual_prompt(title, summary="", sources=None, guidance=""):
     """The exact task a Claude Code session should run with its own Claude when
     driving with --provider manual; write the resulting JSON back to the store."""
-    return SYSTEM + "\n\n" + _user_prompt(title, summary, sources or [])
+    return SYSTEM + "\n\n" + _user_prompt(title, summary, sources or [], guidance)

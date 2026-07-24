@@ -294,6 +294,26 @@ def post_approve(project_id: int):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+# --- reject + learn ----------------------------------------------------------
+
+class RejectBody(BaseModel):
+    reason: str = ""
+    tags: list = []
+
+
+@router.post("/projects/{project_id}/reject")
+def post_reject(project_id: int, body: RejectBody):
+    try:
+        return service.reject_project(project_id, body.reason, body.tags)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/feedback")
+def get_feedback(topic_id: int | None = None, project_id: int | None = None):
+    return {"feedback": service.list_feedback(topic_id=topic_id, project_id=project_id)}
+
+
 # --- content cache -----------------------------------------------------------
 
 @router.get("/cache/stats")

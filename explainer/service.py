@@ -81,6 +81,13 @@ def draft_dict(d):
             "created_at": d.created_at.isoformat() if d.created_at else None}
 
 
+def feedback_dict(f):
+    return {"id": f.id, "project_id": f.project_id, "topic_id": f.topic_id,
+            "draft_id": f.draft_id, "verdict": f.verdict, "reason": f.reason or "",
+            "tags": f.tags or [],
+            "created_at": f.created_at.isoformat() if f.created_at else None}
+
+
 def cache_item_dict(r):
     return {"id": r.id, "kind": r.kind, "sha256": r.sha256, "ref_key": r.ref_key,
             "path": r.path, "bytes": int(r.bytes or 0), "mime": r.mime or "",
@@ -169,14 +176,94 @@ def project_detail(project_id):
 
     script = (detail["draft"] or {}).get("script") if detail["draft"] else None
     factcheck = (detail["draft"] or {}).get("factcheck") if detail["draft"] else []
+    # Rejection history for this project's TOPIC — past lessons the next
+    # generation will learn from (so the reviewer sees what's being carried).
+    topic_id = detail["project"].get("topic_id")
     detail.update({
         "assets": assets,
         "clip_flags": clip_flags,
         "factcheck": factcheck,
         "render_url": render_url,
         "post_kit": postkit(script) if script else None,
+        "feedback": list_feedback(topic_id=topic_id) if topic_id else [],
     })
     return detail
+
+
+# --- reject + learn ----------------------------------------------------------
+
+def reject_project(project_id, reason="", tags=None, log=print):
+    """Reject a rendered project with a reason (+ category tags). Records Feedback
+    tied to the project's TOPIC (so the next generation for that topic can learn),
+    sets Project.status='rejected'. Returns the feedback row."""
+    with store.session() as s:
+        p = s.get(store.Project, project_id)
+        if not p:
+            raise ValueError(f"project #{project_id} not found")
+        d = latest_draft(s, project_id)
+        fb = store.Feedback(project_id=project_id, topic_id=p.topic_id,
+                            draft_id=(d.id if d else None), verdict="rejected",
+                            reason=(reason or "").strip(), tags=list(tags or []))
+        s.add(fb)
+        p.status = "rejected"
+        if d:
+            d.status = "needs_review"
+        s.commit()
+        row = feedback_dict(fb)
+    log(f"rejected project #{project_id}: {reason[:80]}")
+    return row
+
+
+def list_feedback(topic_id=None, project_id=None, limit=50):
+    """Recent rejections, newest first (UI history + guidance source)."""
+    with store.session() as s:
+        q = s.query(store.Feedback)
+        if topic_id is not None:
+            q = q.filter(store.Feedback.topic_id == topic_id)
+        if project_id is not None:
+            q = q.filter(store.Feedback.project_id == project_id)
+        rows = q.order_by(store.Feedback.created_at.desc()).limit(limit).all()
+        return [feedback_dict(f) for f in rows]
+
+
+def feedback_guidance(topic_id=None, per_topic=8, recent_global=4):
+    """Build a 'lessons from rejected versions' block for the script prompt:
+    every rejection for THIS topic (most relevant) + a few recent rejections from
+    other topics (channel-wide style lessons). Returns '' if there's nothing."""
+    with store.session() as s:
+        lessons, seen = [], set()
+
+        def _add(f):
+            txt = (f.reason or "").strip()
+            if not txt:
+                return
+            key = txt.lower()
+            if key in seen:
+                return
+            seen.add(key)
+            tag = f"[{', '.join(f.tags)}] " if f.tags else ""
+            lessons.append(f"- {tag}{txt}")
+
+        if topic_id is not None:
+            for f in (s.query(store.Feedback)
+                      .filter(store.Feedback.topic_id == topic_id)
+                      .order_by(store.Feedback.created_at.desc())
+                      .limit(per_topic).all()):
+                _add(f)
+        for f in (s.query(store.Feedback)
+                  .order_by(store.Feedback.created_at.desc())
+                  .limit(recent_global + per_topic).all()):
+            if topic_id is not None and f.topic_id == topic_id:
+                continue
+            if len([l for l in lessons]) >= per_topic + recent_global:
+                break
+            _add(f)
+
+    if not lessons:
+        return ""
+    return ("LESSONS FROM REJECTED VERSIONS — a previous attempt was rejected by the "
+            "reviewer. Do NOT repeat these mistakes; fix each one explicitly in this "
+            "new version:\n" + "\n".join(lessons))
 
 
 # --- topics (manual add + approve) -------------------------------------------
@@ -291,18 +378,23 @@ def list_schedule():
 
 # --- pipeline stages (shared by CLI + API; log() streams progress) -----------
 
-def run_script(topic_id, model=None, log=print):
+def run_script(topic_id, model=None, use_feedback=True, log=print):
     """Generate a shot-list from a topic; create the Project + Draft. Returns
     {project_id, draft_id, script}. New projects start at status 'draft' (reserve
-    'review' for the post-render gate)."""
+    'review' for the post-render gate). When `use_feedback`, folds lessons from any
+    rejected prior version of this topic into the writer's prompt."""
     from explainer import script as scr
+    guidance = feedback_guidance(topic_id) if use_feedback else ""
     with store.session() as s:
         topic = s.get(store.Topic, topic_id)
         if not topic:
             raise ValueError(f"topic #{topic_id} not found")
         log(f"drafting script for topic #{topic.id}: {topic.title} …")
+        if guidance:
+            n = guidance.count("\n- ")
+            log(f"  applying {n} lesson(s) from rejected version(s)")
         sl = scr.generate_script(topic.title, topic.summary, topic.sources or [],
-                                 model=(model or None))
+                                 model=(model or None), guidance=guidance)
         proj = store.Project(topic_id=topic.id, title=sl.get("title") or topic.title,
                              status="draft")
         s.add(proj)

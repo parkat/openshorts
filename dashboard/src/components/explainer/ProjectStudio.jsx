@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, RotateCcw, Copy, Check, AlertTriangle, Film, Pencil, Save, X, Loader2 } from 'lucide-react';
+import { ArrowLeft, RotateCcw, Copy, Check, AlertTriangle, Film, Pencil, Save, X, Loader2, ThumbsDown, MessageSquareWarning } from 'lucide-react';
 import { explainerApi, STATUS_TINT, getApiUrl } from './api';
 import StageBar from './StageBar';
+import RejectModal from './RejectModal';
 
 function CopyBtn({ text }) {
   const [copied, setCopied] = useState(false);
@@ -50,6 +51,7 @@ export default function ProjectStudio({ projectId, onBack }) {
   const [scriptText, setScriptText] = useState('');
   const [saveErr, setSaveErr] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -99,6 +101,7 @@ export default function ProjectStudio({ projectId, onBack }) {
   const factcheck = detail?.factcheck;
   const fcClaims = Array.isArray(factcheck) ? factcheck : (factcheck?.claims || []);
   const kit = detail?.post_kit;
+  const feedback = detail?.feedback || [];
 
   return (
     <div className="p-6 md:p-10 max-w-5xl mx-auto">
@@ -134,6 +137,15 @@ export default function ProjectStudio({ projectId, onBack }) {
               </div>
               <h1 className="text-2xl font-bold text-white">{project.title || '(untitled)'}</h1>
             </div>
+            {detail.render_url && (
+              <button
+                onClick={() => setRejecting(true)}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-red-500/10 text-red-300 hover:bg-red-500/20 transition-colors shrink-0"
+                title="Reject this video with a reason — the next version learns from it"
+              >
+                <ThumbsDown size={15} /> Reject
+              </button>
+            )}
           </div>
 
           <div className="mb-6">
@@ -162,6 +174,28 @@ export default function ProjectStudio({ projectId, onBack }) {
                 <div className="glass-panel p-4 space-y-2">
                   <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">Guardrail flags (gate 1)</h3>
                   {flags.map((f, i) => <Flag key={i} f={f} onResolve={resolveFlag} />)}
+                </div>
+              )}
+
+              {feedback.length > 0 && (
+                <div className="glass-panel p-4 space-y-2">
+                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                    <MessageSquareWarning size={14} className="text-red-400" /> Rejection history — the next script learns from these
+                  </h3>
+                  {feedback.map((fb) => (
+                    <div key={fb.id} className="text-xs p-2.5 rounded-lg bg-red-500/10 text-red-200">
+                      <div className="flex items-center gap-2 mb-1">
+                        {(fb.tags || []).map((t) => (
+                          <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">{t}</span>
+                        ))}
+                        <span className="text-[10px] text-red-400/60 ml-auto">
+                          {fb.project_id === projectId ? 'this project' : `project #${fb.project_id}`}
+                          {fb.created_at ? ` · ${new Date(fb.created_at).toLocaleDateString()}` : ''}
+                        </span>
+                      </div>
+                      {fb.reason}
+                    </div>
+                  ))}
                 </div>
               )}
 
@@ -268,6 +302,14 @@ export default function ProjectStudio({ projectId, onBack }) {
             </div>
           </div>
         </>
+      )}
+
+      {rejecting && (
+        <RejectModal
+          projectId={projectId}
+          onClose={() => setRejecting(false)}
+          onDone={() => { setRejecting(false); load(); }}
+        />
       )}
     </div>
   );

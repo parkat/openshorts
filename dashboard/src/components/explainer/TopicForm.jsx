@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, Loader2, Wand2, RotateCcw, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Plus, Loader2, Wand2, RotateCcw, CheckCircle2, AlertTriangle, Sparkles } from 'lucide-react';
 import { explainerApi } from './api';
 import useExplainerJob from './useExplainerJob';
 
@@ -8,6 +8,7 @@ import useExplainerJob from './useExplainerJob';
 // Project + Draft, then hands off to the studio.
 export default function TopicForm({ onProjectCreated }) {
   const [topics, setTopics] = useState([]);
+  const [fbCounts, setFbCounts] = useState({}); // topic_id -> rejection count
   const [title, setTitle] = useState('');
   const [summary, setSummary] = useState('');
   const [sourcesText, setSourcesText] = useState('');
@@ -21,6 +22,12 @@ export default function TopicForm({ onProjectCreated }) {
 
   const loadTopics = async () => {
     try { setTopics((await explainerApi.topics()).topics || []); } catch { /* ignore */ }
+    try {
+      const fb = (await explainerApi.feedback()).feedback || [];
+      const counts = {};
+      fb.forEach((f) => { if (f.topic_id != null) counts[f.topic_id] = (counts[f.topic_id] || 0) + 1; });
+      setFbCounts(counts);
+    } catch { /* ignore */ }
   };
   useEffect(() => { loadTopics(); }, []);
 
@@ -87,7 +94,14 @@ export default function TopicForm({ onProjectCreated }) {
               <span className="text-xs font-mono text-zinc-600 shrink-0">#{t.id}</span>
               <div className="flex-1 min-w-0">
                 <p className="text-white font-medium truncate">{t.title}</p>
-                <p className="text-xs text-zinc-500">{t.origin} · {(t.sources || []).length} source(s) · {t.status}</p>
+                <p className="text-xs text-zinc-500 flex items-center gap-2">
+                  {t.origin} · {(t.sources || []).length} source(s) · {t.status}
+                  {fbCounts[t.id] > 0 && (
+                    <span className="inline-flex items-center gap-1 text-red-300/90">
+                      <Sparkles size={11} /> {fbCounts[t.id]} lesson{fbCounts[t.id] > 1 ? 's' : ''} to apply
+                    </span>
+                  )}
+                </p>
               </div>
               <button
                 onClick={() => start(() => explainerApi.script(t.id))}
@@ -97,7 +111,7 @@ export default function TopicForm({ onProjectCreated }) {
                 }`}
               >
                 {running && job?.stage === 'script' ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
-                Generate script
+                {fbCounts[t.id] > 0 ? 'Regenerate' : 'Generate script'}
               </button>
             </div>
           ))}

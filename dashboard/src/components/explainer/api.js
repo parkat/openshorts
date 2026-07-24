@@ -52,6 +52,12 @@ export const explainerApi = {
   resolveFlag: (id, kind, target) => postJson(`/flags/${id}/resolve`, { kind, target }),
   // scheduler
   scheduleList: () => fetch(getApiUrl(`${BASE}/schedule`)).then(jsonOrThrow),
+  // reject + learn
+  reject: (id, reason, tags = []) => postJson(`/projects/${id}/reject`, { reason, tags }),
+  feedback: (params = {}) => {
+    const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null)).toString();
+    return fetch(getApiUrl(`${BASE}/feedback${q ? `?${q}` : ''}`)).then(jsonOrThrow);
+  },
 };
 
 // Project.status → tailwind tint. Mirrors the pipeline state machine.
@@ -62,8 +68,12 @@ export const STATUS_TINT = {
   review: 'bg-violet-500/15 text-violet-300',
   scheduled: 'bg-blue-500/15 text-blue-300',
   published: 'bg-emerald-500/15 text-emerald-300',
+  rejected: 'bg-red-500/15 text-red-300',
   failed: 'bg-red-500/15 text-red-300',
 };
+
+// Category tags for a rejection — help route lessons + keep reasons consistent.
+export const REJECT_TAGS = ['hook', 'pacing', 'script', 'captions', 'visuals', 'audio', 'accuracy', 'other'];
 
 export function humanBytes(n) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
