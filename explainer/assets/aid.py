@@ -22,17 +22,23 @@ AID_SHOT = "aid"
 SIZE = "720x1280"          # vertical 9:16 (per parkat)
 DURATION = 4              # <=5s per clip; Veo 3.1 Lite supports 4/6/8 (see openrouter_client)
 
-# Brand style suffix — flat 80s educational-science look, muted rainbow. NO baked
-# film grain / VHS noise: Veo renders it poorly and the composition adds the VHS
-# treatment (grain/scanlines/chroma) in post via VhsOverlay, so keep the clip CLEAN.
+# Brand style anchor (Veo prompting guide): name the medium up front, lock a LIMITED
+# palette, and push against Veo's photoreal/gradient default with explicit flat-vector
+# terms. Text/gradients/3D are excluded in the NEGATIVE field, not here. The comp adds
+# VHS grain in post via VhsOverlay, so the generated clip stays CLEAN.
 STYLE = (
-    " Clean FLAT vector shapes with thick dark #2E2A26 outlines, no gradients, on a "
-    "warm cream #F3ECD9 background. 1980s educational-science / retro-tech flat "
-    "illustration style — simple, bold, MUTED rainbow palette (dusty red #C1544A, "
-    "warm orange #D98A45, mustard #E3C05A, teal #5F9E9A, slate blue #5A7BA6, muted "
-    "purple #8A6BA1). Crisp, clean, smooth — NO film grain, no noise, no scanlines, "
-    "no VHS artifacts. Vertical 9:16 framing, steady locked-off camera. Absolutely "
-    "NO text, no numbers, no letters, no logos, no watermark."
+    ". Flat 2D vector motion-graphic animation, bold clean minimal design, solid flat "
+    "color fills, crisp sharp edges, consistent bold dark charcoal outlines, even flat "
+    "lighting. Warm cream background, limited muted palette of teal and warm orange "
+    "accents. Simple, high-contrast, smooth motion. Static locked-off camera, vertical "
+    "composition."
+)
+
+# Dedicated negative-prompt field — bare nouns Veo should never render.
+NEGATIVE = (
+    "text, letters, words, captions, subtitles, numbers, watermark, logo, signature, "
+    "gradient, glow, 3D render, photorealistic, realistic texture, drop shadow, "
+    "shadows, depth of field, painterly, blurry, distorted, warped, glitch, extra shapes"
 )
 
 # Staged hints so a montage of clips reads as one progressing animation.
@@ -79,7 +85,8 @@ def generate_aids(shots, out_dir, key=None, log=print):
                 log(f"  aid {i}.{j} <- cache reuse (no OpenRouter spend)")
                 continue
             try:
-                res = orc.generate_video(prompt, out, size=SIZE, duration=DURATION, key=key)
+                res = orc.generate_video(prompt, out, size=SIZE, duration=DURATION,
+                                         negative_prompt=NEGATIVE, key=key)
                 cost += res.get("cost") or 0.0
                 made += 1
                 cache.put("video", out, ref_key=rk, source=prompt, model=orc.VIDEO_MODEL,

@@ -139,20 +139,25 @@ def tts(text, voice="Puck", model=None, out_path=None, response_format="pcm",
 # --- video generation: dedicated async /videos endpoint (submit -> poll -> pull) ---
 import time
 
-VIDEO_MODEL = "google/veo-3.1-fast"   # Veo 3.1 Fast (720p ~$0.08/s no-audio; durations 4/6/8)
+VIDEO_MODEL = "google/veo-3.1"   # Veo 3.1 (best flat-vector quality in bake-off; 720p ~$0.20/s no-audio)
 
 
 def generate_video(prompt, out_path, model=None, size="720x1280", duration=4,
-                   generate_audio=False, key=None, poll_interval=15, timeout=900, **kw):
+                   generate_audio=False, negative_prompt=None, enhance_prompt=False,
+                   key=None, poll_interval=15, timeout=900, **kw):
     """Text->video via the /videos endpoint. Submits the job, polls until it
     completes, then downloads the mp4 to out_path. Returns {"path", "cost", "id"}.
 
-    `size` is exact WIDTHxHEIGHT (720x1280 = our vertical 9:16). `duration` seconds —
-    Veo 3.1 Lite supports 4/6/8 (default 4, i.e. <=5). We request `generate_audio`
-    False: the composition mutes all video and drives sound from the narration/
-    soundbite master, and no-audio is the cheaper SKU."""
+    `size` is exact WIDTHxHEIGHT (720x1280 = vertical 9:16). `duration` 4/6/8 for Veo.
+    `negative_prompt` (bare nouns to exclude — text/gradient/3D/etc.) and
+    `enhance_prompt` False (don't let Veo rewrite our detailed prompt) come from the
+    Veo prompting guide. `generate_audio` False: composition mutes video, master
+    carries sound, and no-audio is cheaper."""
     body = {"model": model or VIDEO_MODEL, "prompt": prompt, "size": size,
-            "duration": int(duration), "generate_audio": bool(generate_audio)}
+            "duration": int(duration), "generate_audio": bool(generate_audio),
+            "enhance_prompt": bool(enhance_prompt)}
+    if negative_prompt:
+        body["negative_prompt"] = negative_prompt
     body.update(kw)
     r = requests.post(f"{BASE}/videos", headers=_headers(key), json=body, timeout=60)
     try:
