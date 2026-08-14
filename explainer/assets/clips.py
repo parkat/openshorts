@@ -107,7 +107,13 @@ def fetch_clip(url, start_s, end_s, out_path):
         "--force-overwrites",          # re-fetch cleanly if the window changed (don't keep a stale clip)
         "--download-sections", section,
         "--force-keyframes-at-cuts",
-        "-f", "bv*[height<=1920]+ba/b",
+        # Prefer H.264/AAC. "best by height" routinely picks an AV1 or VP9 stream
+        # whose CDN URL 403s on a ranged --download-sections request (observed on
+        # itag 399), and H.264 is what every downstream ffmpeg step wants anyway.
+        # Fall back through VP9-or-whatever so an H.264-less video still fetches.
+        "-f", ("bv*[height<=1920][vcodec^=avc1]+ba[acodec^=mp4a]/"
+               "bv*[height<=1920][vcodec^=avc1]+ba/"
+               "b[ext=mp4]/bv*[height<=1920]+ba/b"),
         "--recode-video", "mp4",
         "-o", out_path,
         url,
