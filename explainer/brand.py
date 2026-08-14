@@ -69,6 +69,31 @@ MOODS = {
         "aid_code_style": None,     # None = aidgen.py's standard motion direction
         "vhs": BRAND.get("vhs"),
     },
+    # Teach: a straight explainer. Same look as default — this preset changes only
+    # how it's SPOKEN, for topics where the substance is the draw and hype reads as
+    # noise (how something works, walkthroughs, soundbite-led teaching pieces).
+    # Palette is deliberately shared with default, so switching to it does NOT
+    # invalidate generated aids: they re-render against an identical theme.
+    "teach": {
+        "palette": BRAND["palette"],
+        "highlight": "#FFD21E",
+        # Aoede reads bright and fast by default, which is most of the "hype" feel.
+        # Charon is the calmer instrument; the tone directive does the rest.
+        "voice": "Charon",
+        # Gemini TTS slows down on pitch/manner words ("calm", "measured", "even")
+        # the same way `dark` does — see the note there. 1.06 compensates without
+        # pushing it back toward the energetic read we're trying to get away from.
+        "speed": 1.06,
+        "tts_tone": ("Read as a knowledgeable teacher explaining something clearly to "
+                     "an intelligent adult: calm, measured and even, with natural "
+                     "emphasis on the key terms. Unhurried and matter-of-fact. No "
+                     "salesmanship, no hype, no dramatic build"),
+        "aid_style": None,
+        # Aids stay on the default motion direction: the look was approved, and a
+        # change here would alter the codegen cache key and re-author every aid.
+        "aid_code_style": None,
+        "vhs": BRAND.get("vhs"),
+    },
     # Dark: investigative / grave. Near-black ground, cold steel + warning amber,
     # blood red for the accusation beats. Delivery is measured and heavy.
     "dark": {
