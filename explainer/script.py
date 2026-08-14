@@ -5,10 +5,15 @@ carries a `source` pointer for the fact-check stage. Output is structured JSON t
 Remotion `ExplainerShort` composition renders. Runs via OpenRouter (headless) or a
 Claude Code session (`manual_prompt()` returns the exact task to fill, $0 API).
 """
+import os
 import json
 import re
 
 import openrouter_client as orc
+
+# Generous: the shot list is a few hundred tokens of JSON, but a reasoning model
+# burns a chunk of the budget thinking first — at 3000 it returned empty content.
+MAX_TOKENS = int(os.environ.get("EXPLAINER_SCRIPT_MAX_TOKENS", "8000"))
 
 SYSTEM = """You are the head writer for "Scientific Awareness", a faceless AI-education
 Shorts channel. Write a 30-45 second vertical Short in a HYPE HOT-TAKE voice:
@@ -136,7 +141,7 @@ def generate_script(title, summary="", sources=None, model=None, key=None, guida
         {"role": "user", "content": _user_prompt(title, summary, sources or [], guidance)},
     ]
     out = orc.chat(messages, model=model or orc.MODELS["polish"],
-                   temperature=0.8, max_tokens=3000, key=key)
+                   temperature=0.8, max_tokens=MAX_TOKENS, key=key)
     return _extract_json(out)
 
 

@@ -92,7 +92,18 @@ def chat(messages, model=None, temperature=0.7, max_tokens=None, key=None, **kw)
     """
     d = chat_full(messages, model=model, temperature=temperature,
                   max_tokens=max_tokens, key=key, **kw)
-    return d["choices"][0]["message"]["content"]
+    choice = d["choices"][0]
+    text = choice["message"].get("content") or ""
+    # A reasoning model spends part of its budget THINKING before it writes a token,
+    # so a too-small max_tokens returns truncated or even empty content. Silently
+    # handing that back produces baffling downstream errors ("No JSON object in model
+    # output:" with nothing after it), so fail here where the cause is obvious.
+    if choice.get("finish_reason") == "length":
+        raise OpenRouterError(
+            f"response truncated at max_tokens={max_tokens or 'default'} "
+            f"(only {len(text)} chars of content; reasoning tokens consumed the rest). "
+            "Raise max_tokens for this call.")
+    return text
 
 
 def generate_image(prompt, model=None, out_path=None, aspect_ratio=None, key=None, **kw):

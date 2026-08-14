@@ -96,7 +96,7 @@ def factcheck(script, source_text="", model=None, key=None):
         {"role": "user", "content": _user_prompt(script, source_text)},
     ]
     out = orc.chat(messages, model=model or orc.MODELS["factcheck"],
-                   temperature=0.0, max_tokens=2500, key=key)
+                   temperature=0.0, max_tokens=6000, key=key)
     return _normalize(_extract_json(out))
 
 
