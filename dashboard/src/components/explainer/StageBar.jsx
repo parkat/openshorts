@@ -16,7 +16,7 @@ const STAGES = [
 export default function StageBar({ detail, projectId, onChanged }) {
   const [showLogs, setShowLogs] = useState(false);
   const [showAssetOpts, setShowAssetOpts] = useState(false);
-  const [assetOpts, setAssetOpts] = useState({ speed: 1.0 });
+  const [assetOpts, setAssetOpts] = useState({ speed: 1.0, aid_mode: 'motion' });
   const [busyAction, setBusyAction] = useState(null); // non-job actions (approve/schedule)
   const { job, start, running } = useExplainerJob((j) => { setShowLogs(true); onChanged?.(j); });
 

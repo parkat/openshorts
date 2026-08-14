@@ -242,6 +242,7 @@ class AssetsBody(BaseModel):
     ai_visuals: bool = False
     no_svg: bool = False
     no_music: bool = False
+    aid_mode: str | None = None   # motion | video | motion-then-video
 
 
 class RenderBody(BaseModel):
@@ -278,7 +279,8 @@ def post_assets(body: AssetsBody):
     opts = service.AssetOpts(
         voice=body.voice, tone=body.tone, speed=body.speed,
         no_clips=body.no_clips, no_visuals=body.no_visuals,
-        ai_visuals=body.ai_visuals, no_svg=body.no_svg, no_music=body.no_music)
+        ai_visuals=body.ai_visuals, no_svg=body.no_svg, no_music=body.no_music,
+        aid_mode=body.aid_mode)
     return _launch("assets", body.project_id, service.run_assets,
                    {"project_id": body.project_id, "opts": opts})
 

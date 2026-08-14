@@ -27,13 +27,13 @@ import datetime
 import store
 
 CACHE_DIR = os.environ.get("EXPLAINER_CACHE") or "cache"
-KINDS = ("video", "image", "transcript", "youtube", "clip", "svg", "audio")
+KINDS = ("video", "image", "transcript", "youtube", "clip", "svg", "audio", "code")
 
 _MIME = {"video": "video/mp4", "image": "image/png", "transcript": "application/json",
          "youtube": "video/mp4", "clip": "video/mp4", "svg": "image/svg+xml",
-         "audio": "audio/wav"}
+         "audio": "audio/wav", "code": "text/javascript"}
 _EXT = {"video": "mp4", "image": "png", "transcript": "json", "youtube": "mp4",
-        "clip": "mp4", "svg": "svg", "audio": "wav"}
+        "clip": "mp4", "svg": "svg", "audio": "wav", "code": "js"}
 
 
 def _now():
@@ -54,6 +54,17 @@ def ref_for_video(model, prompt, size, duration):
     """Semantic key for a generated video — same prompt+model+size+duration reuses."""
     h = hashlib.sha1(f"{model}|{size}|{duration}|{prompt}".encode("utf-8")).hexdigest()[:16]
     return f"video:{h}"
+
+
+def ref_for_code(model, prompt, contract):
+    """Semantic key for a GENERATED motion-graphic aid component.
+
+    `contract` is the version of the authoring contract (the system prompt + the
+    argument shape DynamicAid passes down). Bump it whenever that contract changes
+    so we stop reusing components written against the old one — the code is only
+    interchangeable if the runtime it was written for is the same."""
+    h = hashlib.sha1(f"{model}|{contract}|{prompt}".encode("utf-8")).hexdigest()[:16]
+    return f"code:{h}"
 
 
 def ref_for_transcript(video_id):

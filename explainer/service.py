@@ -31,6 +31,10 @@ class AssetOpts:
     ai_visuals: bool = False
     no_svg: bool = False
     no_music: bool = False
+    # aid visuals: "motion" (LLM-authored Remotion component, default), "video"
+    # (paid clips from the video model), or "motion-then-video". None = the
+    # EXPLAINER_AID_MODE default.
+    aid_mode: str = None
 
 
 # --- shared filesystem/query helpers (were private in cli.py) ---
@@ -583,14 +587,18 @@ def run_assets(project_id, opts=None, log=print):
             else:
                 log("  ⚠️ no PIXABAY key — figure/broll shots fall back to text.")
 
-        # 1c) Generated visual-aid clips for `aid` shots (idempotent per clip).
+        # 1c) Generated visuals for `aid` shots (idempotent per output file).
         n_aid = sum(1 for sh in shots if sh.get("visual") == "aid")
         if n_aid and not opts.no_visuals:
             from explainer.assets import aid as aidmod
-            made, acost = aidmod.generate_aids(shots, pdir, key=os.environ.get("OPENROUTER"),
-                                               style=m.get("aid_style"))
+            aid_mode = (opts.aid_mode or aidmod.MODE)
+            log(f"aid visuals: {n_aid} shot(s), mode={aid_mode}")
+            made, acost = aidmod.generate_aids(
+                shots, pdir, key=os.environ.get("OPENROUTER"),
+                style=m.get("aid_style"), code_style=m.get("aid_code_style"),
+                mode=aid_mode, theme=rnd.brand_theme(mood_name))
             if made:
-                log(f"aid clips: generated {made} (${acost:.2f})")
+                log(f"aid visuals: generated {made} (${acost:.2f})")
             sa, wired = aidmod.gather_aids(shots, pdir, sa)
             if wired:
                 log(f"aid graphics: {wired}/{n_aid} aid shot(s) wired")

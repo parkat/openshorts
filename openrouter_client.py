@@ -58,13 +58,12 @@ def list_models(key=None):
     return r.json().get("data", [])
 
 
-def chat(messages, model=None, temperature=0.7, max_tokens=None, key=None, **kw):
-    """LLM completion (OpenAI-compatible). `messages`=[{"role","content"}].
-    Returns the assistant text. Use for script draft/polish and fact-check.
+def chat_full(messages, model=None, temperature=0.7, max_tokens=None, key=None, **kw):
+    """Same call as chat(), but returns the WHOLE response dict.
 
-    For the Claude-Code-driven flow, a CC session can bypass this entirely and do
-    polish/fact-check with its own Max-plan Claude, then write results back via the
-    CLI — so no OpenRouter spend on reasoning when a human is in the loop.
+    Use when you need `usage` alongside the text — e.g. the aid codegen stage
+    reports real spend per component, which it can't do from the content alone.
+    Pass `usage={"include": True}` to have OpenRouter price the call for you.
     """
     body = {"model": model or MODELS["polish"], "messages": messages, "temperature": temperature}
     if max_tokens:
@@ -80,6 +79,19 @@ def chat(messages, model=None, temperature=0.7, max_tokens=None, key=None, **kw)
     if d.get("error"):
         raise OpenRouterError(str(d["error"]))
     r.raise_for_status()
+    return d
+
+
+def chat(messages, model=None, temperature=0.7, max_tokens=None, key=None, **kw):
+    """LLM completion (OpenAI-compatible). `messages`=[{"role","content"}].
+    Returns the assistant text. Use for script draft/polish and fact-check.
+
+    For the Claude-Code-driven flow, a CC session can bypass this entirely and do
+    polish/fact-check with its own Max-plan Claude, then write results back via the
+    CLI — so no OpenRouter spend on reasoning when a human is in the loop.
+    """
+    d = chat_full(messages, model=model, temperature=temperature,
+                  max_tokens=max_tokens, key=key, **kw)
     return d["choices"][0]["message"]["content"]
 
 

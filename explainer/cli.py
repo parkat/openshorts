@@ -102,7 +102,8 @@ def cmd_assets(args):
     opts = service.AssetOpts(
         voice=args.voice or None, tone=args.tone, speed=args.speed,
         no_clips=args.no_clips, no_visuals=args.no_visuals,
-        ai_visuals=args.ai_visuals, no_svg=args.no_svg, no_music=args.no_music)
+        ai_visuals=args.ai_visuals, no_svg=args.no_svg, no_music=args.no_music,
+        aid_mode=(args.aid_mode or None))
     try:
         service.run_assets(args.project_id, opts)
     except ValueError as e:
@@ -249,6 +250,10 @@ def main():
     ap.add_argument("--speed", type=float, default=1.0,
                     help="narration tempo multiplier (e.g. 1.15 = 15%% faster, pitch preserved)")
     ap.add_argument("--no-music", action="store_true", help="skip the music bed")
+    ap.add_argument("--aid-mode", default="", choices=["", "motion", "video", "motion-then-video"],
+                    help="how to make `aid` visuals: motion = LLM-authored Remotion "
+                         "component (default, ~$0.04); video = paid clips from the "
+                         "video model; motion-then-video = fall back per shot")
     ap.set_defaults(func=cmd_assets)
 
     fp = sub.add_parser("factcheck", help="claim-check the draft against sources")
@@ -284,7 +289,7 @@ def main():
     chp = sub.add_parser("cache", help="inspect/seed the persistent content cache")
     chp.add_argument("action", nargs="?", default="stats",
                      choices=["stats", "list", "backfill"])
-    chp.add_argument("--kind", default="", help="filter: video|image|transcript|clip|svg|youtube|audio")
+    chp.add_argument("--kind", default="", help="filter: video|image|transcript|clip|svg|youtube|audio|code")
     chp.add_argument("--label", default="", help="filter by a concept/keyword label")
     chp.add_argument("--text", default="", help="filter by substring in source/labels")
     chp.set_defaults(func=cmd_cache)

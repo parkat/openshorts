@@ -2,6 +2,12 @@ import React from "react";
 import { Composition } from "remotion";
 import { ShortVideo } from "./compositions/ShortVideo";
 import { ExplainerShort } from "./compositions/ExplainerShort";
+import {
+  AidProbe,
+  DEFAULT_AID_PROBE_PROPS,
+  aidProbePropsSchema,
+  type AidProbeProps,
+} from "./compositions/explainer/AidProbe";
 import type { ShortVideoProps } from "./lib/types";
 import { shortVideoPropsSchema } from "./lib/types";
 import type { ExplainerShortProps } from "./lib/explainer-types";
@@ -146,6 +152,32 @@ export const RemotionRoot: React.FC = () => {
             fps,
             width: Math.round(pos(p.width, DEFAULT_EXPLAINER_PROPS.width)),
             height: Math.round(pos(p.height, DEFAULT_EXPLAINER_PROPS.height)),
+          };
+        }}
+      />
+      {/* Validation harness for a single generated aid — driven by
+          POST /aid/probe in the render-service, and handy in Studio for
+          eyeballing one aid without rebuilding a whole short. */}
+      <Composition
+        id="AidProbe"
+        schema={aidProbePropsSchema}
+        component={AidProbe}
+        durationInFrames={DEFAULT_AID_PROBE_PROPS.durationInFrames}
+        fps={DEFAULT_AID_PROBE_PROPS.fps}
+        width={DEFAULT_AID_PROBE_PROPS.width}
+        height={DEFAULT_AID_PROBE_PROPS.height}
+        defaultProps={DEFAULT_AID_PROBE_PROPS}
+        calculateMetadata={({ props }) => {
+          const p = props as unknown as AidProbeProps;
+          const pos = (v: number | undefined, fallback: number) =>
+            typeof v === "number" && v > 0 ? v : fallback;
+          return {
+            durationInFrames: Math.round(
+              pos(p.durationInFrames, DEFAULT_AID_PROBE_PROPS.durationInFrames)
+            ),
+            fps: pos(p.fps, DEFAULT_AID_PROBE_PROPS.fps),
+            width: Math.round(pos(p.width, DEFAULT_AID_PROBE_PROPS.width)),
+            height: Math.round(pos(p.height, DEFAULT_AID_PROBE_PROPS.height)),
           };
         }}
       />

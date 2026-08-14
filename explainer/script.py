@@ -36,21 +36,26 @@ Shorts channel. Write a 30-45 second vertical Short in a HYPE HOT-TAKE voice:
     pasted videos). Use it for the hook (their face while you narrate) and for
     speaks:true soundbites where we SEE them talk. A NAMED person or specific show
     ONLY ever goes here.
-  * aid = a GENERATED, animated VISUAL AID (we make it with a video model) that
-    VISUALLY EXPLAINS the current point — a concept made visible, a metaphor in
-    motion. It must TEACH the idea, not just decorate. Examples: "a human silhouette
-    beside an AI silhouette that keeps growing taller, surpassing the human — showing
-    AI overtaking human intelligence"; "one glowing node multiplying into a dense
-    network — showing capability compounding"; "two curves on a graph, the AI curve
-    bending sharply upward past the human line". visual_note = describe the animation
-    AND the single idea it makes the viewer understand. Abstract/conceptual is GOOD
-    here (this is the channel's primary explanatory visual now). PREFER `aid` over a
-    plain text beat whenever a point can be shown.
+  * aid = a GENERATED, animated VISUAL AID that VISUALLY EXPLAINS the current point
+    — a concept made visible, a metaphor in motion. It must TEACH the idea, not just
+    decorate. Examples: "a human silhouette beside an AI silhouette that keeps
+    growing taller, surpassing the human — showing AI overtaking human intelligence";
+    "one glowing node multiplying into a dense network — showing capability
+    compounding"; "two curves on a graph, the AI curve bending sharply upward past
+    the human line". visual_note = describe the animation AND the single idea it
+    makes the viewer understand. Abstract/conceptual is GOOD here (this is the
+    channel's primary explanatory visual now). PREFER `aid` over a plain text beat
+    whenever a point can be shown.
+    An aid is drawn as FLAT VECTOR MOTION GRAPHICS, so describe it as such: simple
+    bold SHAPES that move, grow, multiply, tilt, cross or fill — silhouettes, bars,
+    curves, arrows, dots, circles, grids. Say what CHANGES from the start of the beat
+    to the end. Do NOT ask for photoreal scenes, camera moves, lighting, textures or
+    crowds of detailed characters; those belong in `broll`.
     NEVER ask for WRITTEN WORDS in an aid — no "speech bubbles in many languages",
-    no signs/labels/screens bearing text, no "the word X". The video model cannot
-    spell and renders garbled fake glyphs. Show the idea with SHAPES, symbols, icons,
-    arrows, counts and motion instead (e.g. NOT "bubbles in many languages" but
-    "dozens of small abstract glyph icons streaming outward"). Captions carry words.
+    no signs/labels/screens bearing text, no "the word X", and no numbers or axis
+    labels. Show the idea with SHAPES, symbols, arrows, counts and motion instead
+    (e.g. NOT "bubbles in many languages" but "dozens of small abstract glyph icons
+    streaming outward"). The captions are the only words on screen.
   * broll = a REAL, FILMABLE stock scene, ONLY for a literal real-world thing a camera
     shoots (e.g. "data center server racks", "hands on a keyboard"). Use sparingly; if
     the point is a concept, use `aid` instead. NEVER a named person / specific show.

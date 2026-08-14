@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
 import { initBundle } from "./bundle.js";
 import { executeRender } from "./render-worker.js";
+import { aidRouter } from "./aid.js";
 
 // --- Render status types ---
 
@@ -81,6 +82,9 @@ function resolveAssetUrls(value: unknown): unknown {
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
+
+// Compile + validate generated motion-graphic aids (POST /aid/compile, /aid/probe).
+app.use(aidRouter);
 
 // Submit a render job
 app.post("/render", (req, res) => {

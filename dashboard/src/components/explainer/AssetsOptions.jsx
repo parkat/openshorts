@@ -9,6 +9,15 @@ const TOGGLES = [
   { key: 'no_music', label: 'No music bed' },
 ];
 
+// How `aid` beats get their visual. Motion graphics are authored as a Remotion
+// component (cents, seconds, follows the mood palette); video buys clips from the
+// video model (~$0.20/s, fixed length, baked palette).
+const AID_MODES = [
+  { value: 'motion', label: 'Motion graphics' },
+  { value: 'motion-then-video', label: 'Motion, fall back to video' },
+  { value: 'video', label: 'Generated video' },
+];
+
 export default function AssetsOptions({ opts, setOpts }) {
   const set = (k, v) => setOpts({ ...opts, [k]: v });
   return (
@@ -45,6 +54,18 @@ export default function AssetsOptions({ opts, setOpts }) {
             onChange={(e) => set('speed', parseFloat(e.target.value) || 1.0)}
             className="input-field !py-1 !px-2 !text-xs w-16"
           />
+        </label>
+        <label className="flex items-center gap-2 text-xs text-zinc-400">
+          Aids
+          <select
+            value={opts.aid_mode || 'motion'}
+            onChange={(e) => set('aid_mode', e.target.value)}
+            className="input-field !py-1 !px-2 !text-xs"
+          >
+            {AID_MODES.map((m) => (
+              <option key={m.value} value={m.value}>{m.label}</option>
+            ))}
+          </select>
         </label>
       </div>
     </div>

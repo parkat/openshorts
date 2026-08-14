@@ -100,7 +100,14 @@ def build_scene_list(alignment, assets=None):
                 scene["videos"] = a["videos"]
             if a.get("videoUrl"):
                 scene["videoUrl"] = a["videoUrl"]
-            has_media = any(scene.get(k) for k in ("images", "imageUrl", "videoUrl", "videos"))
+            # A generated motion-graphic aid ships as CODE, not a file: it fills the
+            # beat exactly and re-themes with the mood, which a baked clip can't.
+            if a.get("aidCode"):
+                scene["aidCode"] = a["aidCode"]
+            if a.get("aidProps"):
+                scene["aidProps"] = a["aidProps"]
+            has_media = any(scene.get(k) for k in
+                            ("images", "imageUrl", "videoUrl", "videos", "aidCode"))
             if visual == "accent_clip" and scene.get("videoUrl"):
                 src = shot.get("source")
                 # A per-shot `speaker` (e.g. "Geoffrey Hinton · Godfather of AI") labels

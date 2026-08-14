@@ -73,7 +73,7 @@ Then restart what you touched:
 |---|---|
 | `app.py`, `explainer/**`, `*.py` | `sudo docker restart openshorts-backend` |
 | `dashboard/src/**` | `sudo docker restart openshorts-frontend` (runs `vite build && preview`) |
-| `remotion/src/**` | `sudo docker compose -f docker-compose.yml -f docker-compose.gpu.yml build renderer && ... up -d renderer` |
+| `remotion/src/**`, `render-service/src/**` | `sudo docker compose -f docker-compose.yml -f docker-compose.gpu.yml build renderer && ... up -d renderer` |
 
 Renderer rebuilds take several minutes — run them in the background and wait on the
 container being recreated, not on the command returning.
@@ -96,9 +96,26 @@ Stage order: `script → clipfind → factcheck → assets → align → render 
 
 ## 4. Gotchas that cost real time
 
-- **Costs money:** `script`, `clipfind`, `factcheck`, `assets` (TTS + Veo aid clips,
-  ~$0.80/4s clip). **Free:** `align`, `render` (local GPU), and any cached aid.
-  Aid generation is idempotent per file — never delete an `aid_*.mp4` casually.
+- **Costs money:** `script`, `clipfind`, `factcheck`, `assets` (TTS, plus aid visuals
+  in `--aid-mode video`). **Free:** `align`, `render` (local GPU), and any cached aid.
+  Generation is idempotent per output file.
+- **Aid visuals default to motion graphics** (`--aid-mode motion`, env
+  `EXPLAINER_AID_MODE`). The LLM authors a Remotion component per aid shot: **~$0.04**
+  and seconds (measured, claude-sonnet-5, one clean attempt), versus ~$0.80/4s clip and
+  minutes of polling for `--aid-mode video` — and a spoken aid is a 3-clip montage, so
+  that's ~$0.04 against ~$2.40 for the same beat. Lands
+  as `aid_<shot>.jsx` (readable source) + `aid_<shot>.js` (compiled) in the project
+  dir. **Both are hand-editable** — tweak the `.jsx`, delete the `.js`, re-run `assets`
+  to recompile, then `render`; no LLM spend. In `video` mode, still never delete an
+  `aid_*.mp4` casually.
+- **A motion aid follows the mood.** It draws only from `theme`, so switching
+  `draft.script["mood"]` and re-running `render` alone re-colours every aid. Baked
+  `aid_*.mp4` clips cannot do this — they need regenerating. The compile gate rejects
+  hardcoded hex colours precisely to keep that true.
+- **Generated aid code is gated** by the render-service: `POST /aid/compile` (denylist
+  + esbuild transform) and `POST /aid/probe` (renders 3 frames, rejects blank or
+  non-animating output). Skip probing with `EXPLAINER_AID_PROBE=0` when iterating;
+  retries via `EXPLAINER_AID_ATTEMPTS` (default 3).
 - **Auto-captions are lossy.** YouTube VTT drops words and drifts. For accurate
   captions delete `output/explainer-<id>/clip*.words.json` before `align` so it
   falls back to whisper. `subtitles.transcribe_audio` uses **medium on cuda**; base
@@ -107,8 +124,11 @@ Stage order: `script → clipfind → factcheck → assets → align → render 
   approximate or wrong. Check the real transcript first — see `explainer/transcript.py`.
 - **Clip cuts** are snapped to speech boundaries by `explainer/assets/snap.py`
   (whisper re-listen, capped drift). Disable with `EXPLAINER_SNAP=0`.
-- **Aids loop** in the render — a 4-8s clip covering a longer beat used to hold a
-  frozen frame. `aid.py` also sizes new clips (4/6/8s) to the beat.
+- **`--aid-mode video` clips still freeze on a long beat.** `Scenes.tsx` passes `loop`
+  to `OffthreadVideo`, but Remotion 4.0.496 has no such prop — it is silently dropped,
+  so a 4-8s clip covering a longer beat holds its last frame. `aid.py` sizing (4/6/8s)
+  only narrows the gap. Motion aids have no such problem: they're a function of
+  `progress`, so they fill whatever beat `align` computes, exactly.
 - **Blurred-bars layout:** YouTube clips are kept full 16:9 and centered over a
   blurred copy — never crop them to 9:16.
 - **Buffer publishing works.** Media is served un-gated at `media.parkat.us/m/<token>`.

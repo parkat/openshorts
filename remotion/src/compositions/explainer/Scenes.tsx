@@ -12,6 +12,7 @@ import {
 } from "remotion";
 import type { ExplainerScene, ExplainerTheme } from "../../lib/explainer-types";
 import { SvgScene, hasSvg } from "./SvgGraphics";
+import { DynamicAid, hasAidCode } from "./DynamicAid";
 
 interface SceneProps {
   scene: ExplainerScene;
@@ -332,8 +333,26 @@ export const SceneRenderer: React.FC<SceneProps> = ({ scene, theme }) => {
       <AnimatedBackdrop theme={theme} role={scene.role} />
     );
   }
-  // Generated aid animation: staged clips play in sequence (progression), not cycled.
+  // Generated aid animation. Preferred form is a motion-graphic COMPONENT, which
+  // fills the beat exactly (no loop, no frozen tail) and re-themes for free
+  // because it draws from `theme`. Falls back to the older generated-video
+  // montage when a project was built in video mode.
   if (scene.type === "aid") {
+    if (hasAidCode(scene)) {
+      const fallback = hasSvg(scene) ? (
+        <SvgScene scene={scene} theme={theme} />
+      ) : (
+        <AnimatedBackdrop theme={theme} role={scene.role} />
+      );
+      return (
+        <DynamicAid
+          code={scene.aidCode}
+          aidProps={scene.aidProps}
+          theme={theme}
+          fallback={fallback}
+        />
+      );
+    }
     const av = sceneVideos(scene);
     if (av.length) return <AidSequence videos={av} />;
   }

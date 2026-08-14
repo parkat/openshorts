@@ -1,15 +1,27 @@
-"""Generated visual-aid stage: turn each `aid` shot into short (<=5s) 720x1280
-brand-styled clips via OpenRouter video (HappyHorse — see openrouter_client).
+"""Generated visual-aid stage. An `aid` beat is an animation that EXPLAINS the
+point (a concept made visible), not decoration — the lane's primary explanatory
+visual.
 
-An `aid` beat is an animation that EXPLAINS the point (a concept made visible), not
-decoration. A speaks:true aid rides the speaker's ~15s soundbite, and clips are
-capped at 5s, so it becomes a MONTAGE of several staged clips that progress the same
-concept; a narrated aid is one short clip.
+Two ways to make one, chosen by `EXPLAINER_AID_MODE`:
 
-Files land as `aid_<shot>_<n>.mp4` in the project dir; `gather_aids` wires them onto
-the shot as `videos` (rendered MUTED — the audio is the AI narrator or the speaker's
-baked soundbite). `generate_aids` is idempotent per clip, so it reuses anything
-already on disk (a poor-man's cache until the content cache lands).
+  motion (default)   The LLM writes a small Remotion COMPONENT (explainer/assets/
+                     aidgen.py). Lands as `aid_<shot>.jsx` (readable, editable) +
+                     `aid_<shot>.js` (compiled); `gather_aids` wires the compiled
+                     code onto the shot as `aidCode`. Costs ~$0.04, generates in
+                     seconds, fills the beat exactly, and re-themes with the mood
+                     because it draws only from `theme`.
+
+  video              The original path: 720x1280 clips from OpenRouter video (Veo).
+                     Lands as `aid_<shot>_<n>.mp4`, wired as `videos`. A speaks:true
+                     aid rides a long soundbite and clips cap at 8s, so it becomes a
+                     MONTAGE of staged clips progressing one concept. ~$0.20/s.
+
+  motion-then-video  Motion first; anything the codegen loop can't produce falls
+                     back to a generated clip.
+
+Either way the visual is MUTED at render — the audio is the AI narrator or the
+speaker's baked soundbite. Generation is idempotent per output file, so re-running
+the stage reuses whatever is already on disk.
 """
 import os
 import glob
@@ -22,6 +34,9 @@ AID_SHOT = "aid"
 SIZE = "720x1280"          # vertical 9:16 (per parkat)
 DURATION = 4               # fallback; Veo supports 4/6/8s (see openrouter_client)
 DURATIONS = (4, 6, 8)      # selectable renders, ascending
+
+MODES = ("motion", "video", "motion-then-video")
+MODE = (os.environ.get("EXPLAINER_AID_MODE") or "motion").strip().lower()
 
 
 def _duration_for(shot, n_clips):
@@ -110,16 +125,59 @@ def _existing(out_dir, i):
     return sorted(glob.glob(os.path.join(out_dir, f"aid_{i}_*.mp4")))
 
 
-def generate_aids(shots, out_dir, key=None, log=print, style=None):
-    """Generate (or reuse) aid clips for every aid shot. Idempotent PER CLIP — an
-    aid_<i>_<j>.mp4 already on disk is left alone. `style` overrides the brand art
-    direction (e.g. a mood preset). Returns (made, cost_usd)."""
-    os.makedirs(out_dir, exist_ok=True)
+def _code_paths(out_dir, i):
+    """Readable source + compiled output for a motion aid."""
+    return (os.path.join(out_dir, f"aid_{i}.jsx"),
+            os.path.join(out_dir, f"aid_{i}.js"))
+
+
+def _aid_indices(shots):
+    return [i for i, sh in enumerate(shots) if sh.get("visual") == AID_SHOT]
+
+
+def _generate_motion(shots, out_dir, theme, style=None, key=None, log=print, only=None):
+    """Author a motion-graphic component per aid shot. Idempotent per shot — an
+    aid_<i>.js already on disk is left alone. Returns (made, cost, unresolved)
+    where `unresolved` is the aid shot indices codegen could not produce."""
+    from explainer.assets import aidgen
+
+    made, cost, unresolved = 0, 0.0, []
+    for i in _aid_indices(shots):
+        if only is not None and i not in only:
+            continue
+        jsx_path, js_path = _code_paths(out_dir, i)
+        if os.path.isfile(js_path):
+            continue  # already in this project
+        note = (shots[i].get("visual_note") or "").strip()
+        labels = _svg._keywords(note)[:12]
+        log(f"  aid {i}: authoring motion graphic …")
+        try:
+            m, c = aidgen.author_cached(shots[i], theme, style=style, key=key, log=log,
+                                        labels=labels, jsx_path=jsx_path, js_path=js_path)
+        except Exception as e:  # noqa: BLE001 — one failed aid shouldn't abort the stage
+            log(f"  aid {i} FAILED: {e}")
+            unresolved.append(i)
+            continue
+        cost += c
+        if os.path.isfile(js_path):
+            made += m
+            log(f"  aid {i} -> {os.path.basename(js_path)}"
+                + (f" (${c:.4f})" if c else ""))
+        else:
+            log(f"  aid {i}: codegen gave up")
+            unresolved.append(i)
+    return made, cost, unresolved
+
+
+def _generate_video(shots, out_dir, style=None, key=None, log=print, only=None):
+    """The original paid path: staged 720x1280 clips from OpenRouter video.
+    Idempotent PER CLIP. Returns (made, cost_usd)."""
     style = style or STYLE
     made, cost = 0, 0.0
-    for i, shot in enumerate(shots):
-        if shot.get("visual") != AID_SHOT:
+    for i in _aid_indices(shots):
+        if only is not None and i not in only:
             continue
+        shot = shots[i]
         note = scrub_text_requests((shot.get("visual_note") or "").strip())
         labels = _svg._keywords(note)[:12]
         n = _n_clips(shot)
@@ -149,14 +207,56 @@ def generate_aids(shots, out_dir, key=None, log=print, style=None):
     return made, cost
 
 
+def generate_aids(shots, out_dir, key=None, log=print, style=None, mode=None,
+                  theme=None, code_style=None):
+    """Produce a visual aid for every aid shot. Returns (made, cost_usd).
+
+    `mode` is motion | video | motion-then-video (default from EXPLAINER_AID_MODE).
+    `style` is the video-model art direction, `code_style` the motion-graphics art
+    direction — a mood preset supplies both. `theme` is the ExplainerTheme the
+    motion aid will render against; the probe uses it, so a component that would be
+    invisible in this mood is rejected at generation rather than on screen.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    mode = (mode or MODE).strip().lower()
+    if mode not in MODES:
+        log(f"  unknown aid mode {mode!r} — falling back to 'motion'")
+        mode = "motion"
+
+    if mode == "video":
+        return _generate_video(shots, out_dir, style=style, key=key, log=log)
+
+    if theme is None:
+        from explainer.render import brand_theme
+        theme = brand_theme()
+
+    made, cost, unresolved = _generate_motion(shots, out_dir, theme, style=code_style,
+                                              key=key, log=log)
+    if unresolved and mode == "motion-then-video":
+        log(f"  falling back to generated video for {len(unresolved)} aid shot(s)")
+        vmade, vcost = _generate_video(shots, out_dir, style=style, key=key, log=log,
+                                       only=set(unresolved))
+        made, cost = made + vmade, cost + vcost
+    elif unresolved:
+        log(f"  {len(unresolved)} aid shot(s) have no visual — they degrade to a "
+            "concept graphic or the brand backdrop")
+    return made, cost
+
+
 def gather_aids(shots, out_dir, shot_assets):
-    """Wire aid_<i>_*.mp4 clips onto each aid shot as `videos` (visual). Merges into
-    {shot_index: {...}} shot_assets. Returns (merged, n_shots_wired)."""
+    """Wire each aid shot's generated visual onto it. A motion component is inlined
+    as `aidCode` (a few KB — cheaper than a second fetch inside headless Chromium);
+    generated clips wire as `videos`. Merges into {shot_index: {...}} shot_assets.
+    Returns (merged, n_shots_wired)."""
     merged = {int(k): dict(v) for k, v in (shot_assets or {}).items()}
     job_id = os.path.basename(out_dir)
     n = 0
-    for i, shot in enumerate(shots):
-        if shot.get("visual") != AID_SHOT:
+    for i in _aid_indices(shots):
+        _, js_path = _code_paths(out_dir, i)
+        if os.path.isfile(js_path):
+            with open(js_path, encoding="utf-8") as f:
+                merged.setdefault(i, {})["aidCode"] = f.read()
+            n += 1
             continue
         files = _existing(out_dir, i)
         if not files:

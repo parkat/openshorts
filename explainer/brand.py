@@ -66,6 +66,7 @@ MOODS = {
         "speed": 1.0,
         "tts_tone": BRAND["tts_tone"],
         "aid_style": None,          # None = aid.py's standard cream/teal STYLE
+        "aid_code_style": None,     # None = aidgen.py's standard motion direction
         "vhs": BRAND.get("vhs"),
     },
     # Dark: investigative / grave. Near-black ground, cold steel + warning amber,
@@ -97,6 +98,16 @@ MOODS = {
             "Static locked-off camera, vertical composition. Completely WORDLESS: every "
             "speech bubble, sign, screen and label is EMPTY or holds only simple abstract "
             "glyphs — never written words or letterforms."
+        ),
+        # Motion-graphics direction for the codegen path. Deliberately says nothing
+        # about colour: a generated component reads theme.* at render time, so the
+        # dark palette above already applies to it — that's the whole reason a
+        # component beats a baked clip. Direct the MOTION, not the paint.
+        "aid_code_style": (
+            "Stark, restrained, ominous. Few elements, heavy strokes, generous empty "
+            "space. Motion is slow and deliberate — long linear or ease-in-out moves "
+            "rather than springy overshoot; something encroaches, tilts, closes in or "
+            "accumulates over the beat. No bounce, no playfulness."
         ),
         "vhs": {"scanlines": True, "grain": "light", "chroma_wobble": "subtle"},
     },
