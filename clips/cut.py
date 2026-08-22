@@ -43,6 +43,16 @@ MIN_PART = 3.0
 # sparser than word boundaries, so this is much larger than a word-level snap.
 MAX_SHIFT = 8.0
 
+# Whisper's word timings run a little late at a start and a little early at an end,
+# which is harmless mid-sentence but clips a SHORT leading word off entirely — cutting
+# exactly on the reported start of "Get" lost the word and opened a clip on "enough
+# people raving...". These pads are safe precisely because every boundary we cut on is
+# a sentence edge, so there is a pause on the other side of them to expand into. (An
+# earlier version padded word-level splits and duplicated the neighbouring word; that
+# is why this only applies once boundaries are sentence-aligned.)
+LEAD_IN = 0.15
+TAIL_OUT = 0.15
+
 # A word ending a sentence, allowing for a trailing quote/bracket.
 _SENTENCE_END = re.compile(r"[.!?…][\"'\)\]]*$")
 
@@ -135,9 +145,6 @@ def plan_window(source_path, start_s, end_s, payoff_s=0.0, want_loop=False,
         s, e = snap(source_path, start_s, end_s, log=log)
         return s, e, None
 
-    if abs(new_start - start_s) > 0.01 or abs(new_end - end_s) > 0.01:
-        log(f"  sentences: {start_s:.2f}-{end_s:.2f} -> {new_start:.2f}-{new_end:.2f}")
-
     payoff = None
     if want_loop and payoff_s:
         inner = [x for x in starts if new_start + MIN_PART <= x <= new_end - MIN_PART]
@@ -147,6 +154,17 @@ def plan_window(source_path, start_s, end_s, payoff_s=0.0, want_loop=False,
                 f"{MIN_PART:.0f}s on both sides — cutting linear")
         elif abs(payoff - float(payoff_s)) > 0.01:
             log(f"  payoff {float(payoff_s):.2f} was mid-sentence -> {payoff:.2f}")
+
+    # Breathe outwards into the pauses around each sentence edge. The payoff gets
+    # the same lead-in as the start: it is the clip's first frame on every repeat,
+    # and the run-up ends on the identical value, so the wrap stays exact.
+    new_start = max(0.0, new_start - LEAD_IN)
+    new_end = new_end + TAIL_OUT
+    if payoff is not None:
+        payoff = max(new_start + MIN_PART, payoff - LEAD_IN)
+
+    if abs(new_start - start_s) > 0.01 or abs(new_end - end_s) > 0.01:
+        log(f"  sentences: {start_s:.2f}-{end_s:.2f} -> {new_start:.2f}-{new_end:.2f}")
 
     return new_start, new_end, payoff
 
