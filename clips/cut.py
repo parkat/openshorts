@@ -30,6 +30,12 @@ import json
 import tempfile
 import subprocess
 
+# The house cut. A payoff-first rotation retains better than a linear clip, and
+# every moment carries a payoff point, so this is the path unless something about
+# the window makes it impossible — in which case the cut falls back to linear and
+# says so rather than producing an awkward open.
+DEFAULT_EDIT = "loop"
+
 # Both halves of a rotation need real material; a 3s stub reads as a glitch.
 MIN_PART = 3.0
 
@@ -226,7 +232,7 @@ def captions(audio_path, log=print):
     return words
 
 
-def build(source_path, start_s, end_s, out_dir, payoff_s=0.0, edit="linear",
+def build(source_path, start_s, end_s, out_dir, payoff_s=0.0, edit=DEFAULT_EDIT,
           log=print):
     """Plan -> cut -> (rotate) -> extract audio -> caption. Returns the manifest.
 

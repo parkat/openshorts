@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   Scissors, RotateCcw, AlertTriangle, Search, Zap, Trash2, Film, Wand2,
 } from 'lucide-react';
-import { clipsApi, MOODS, EDITS, fmtClock } from './api';
+import { clipsApi, MOODS, EDITS, DEFAULT_EDIT, fmtClock } from './api';
 import useClipsJob from './useClipsJob';
 import JobLog from './JobLog';
 import CandidateCard from './CandidateCard';
@@ -16,7 +16,7 @@ export default function ClipsTab() {
   const [url, setUrl] = useState('');
   const [limit, setLimit] = useState(0);
   const [mood, setMood] = useState('');
-  const [edit, setEdit] = useState('linear');
+  const [edit, setEdit] = useState(DEFAULT_EDIT);
   const [sources, setSources] = useState([]);
   const [selected, setSelected] = useState(null);
   const [candidates, setCandidates] = useState([]);
@@ -179,11 +179,17 @@ export default function ClipsTab() {
               <strong>Ingest</strong> downloads the video once and builds its transcript — then scan
               it for moments below. <strong>Run everything</strong> chains ingest → moments → cut →
               render. Only the moment scan costs money; cutting and rendering are local.
-              {edit === 'loop' && (
+              {edit === 'loop' ? (
                 <>
-                  {' '}<strong>Loop</strong> opens each clip on its payoff, then plays the run-up
-                  and ends on the frame the payoff began — so a repeat runs straight back into
-                  the punchline with no seam. Needs a payoff point (⟲) on the moment.
+                  {' '}Clips are cut as a <strong>loop</strong> by default: each one opens on its
+                  payoff (⟲), then plays the run-up, ending on the frame the payoff began — so a
+                  repeat runs straight back into the punchline with no seam. A moment with no
+                  usable payoff falls back to linear on its own.
+                </>
+              ) : (
+                <>
+                  {' '}<strong>Linear</strong> plays each window straight through, instead of the
+                  default payoff-first loop.
                 </>
               )}
             </p>

@@ -63,7 +63,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 | `s3_uploader.py` | AWS S3 upload with caching |
 | `subtitles.py` | SRT generation, FFmpeg subtitle burning, and dubbed video transcription |
 | `translate.py` | ElevenLabs dubbing API for AI voice translation |
-| `clips/` | **Clips lane** — mine ONE long video for many standalone Shorts (`ingest`→`moments`→`cut`→`render`), SQLite-durable, `python -m clips` |
+| `clips/` | **Clips lane** — mine ONE long video for many standalone Shorts (`ingest`→`moments`→`cut`→`render`), SQLite-durable, `python -m clips`. Cuts are **payoff-first loops** by default (see `clips/cut.py`) |
 | `dashboard/src/App.jsx` | Main React component with state management |
 | `dashboard/src/components/TranslateModal.jsx` | Voice dubbing UI with language selection |
 

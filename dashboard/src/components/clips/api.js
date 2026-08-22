@@ -61,9 +61,11 @@ export const MOODS = ['', 'dark', 'teach'];
 // it opens on the punchline and ends where the punchline began — the wrap back to
 // the start is continuous speech, so a repeat plays as one unbroken take.
 export const EDITS = [
-  { value: 'linear', label: 'Linear' },
   { value: 'loop', label: 'Loop (payoff first)' },
+  { value: 'linear', label: 'Linear' },
 ];
+
+export const DEFAULT_EDIT = 'loop';
 
 export function fmtClock(seconds) {
   const s = Math.max(0, Math.floor(Number(seconds) || 0));

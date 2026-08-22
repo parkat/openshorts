@@ -65,8 +65,10 @@ MARK THE PAYOFF. Also return `payoff`: the second the punchline STARTS — the r
 the number, the admission, the line the whole window exists to deliver. Everything
 before it is the run-up.
 
-The editor rotates the clip so it opens on the punchline and loops back into it, so
-`payoff` becomes the FIRST FRAME of the Short. It must therefore be the start of a
+The editor rotates EVERY clip so it opens on the punchline and loops back into it —
+this is the default cut, not an option — so `payoff` becomes the FIRST FRAME of the
+Short. A moment you return without a usable payoff gets played straight through
+instead, which is a weaker video; treat finding the payoff as part of the job. It must therefore be the start of a
 COMPLETE SENTENCE — the first word of it, including that sentence's own subject.
 Never point at the middle of a sentence: opening on "unleashed AI-powered bots..."
 is a fragment, where "Without permission, they unleashed AI-powered bots..." is a

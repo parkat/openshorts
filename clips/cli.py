@@ -205,8 +205,9 @@ def main():
     cp.add_argument("--source-id", type=int, default=0)
     cp.add_argument("--all", action="store_true", help="every uncut candidate of --source-id")
     cp.add_argument("--edit", default="", choices=["", "linear", "loop"],
-                    help="loop = open on the payoff, then the run-up, ending where "
-                         "the payoff began (seamless repeat)")
+                    help="loop (DEFAULT) = open on the payoff, then the run-up, "
+                         "ending where the payoff began (seamless repeat); "
+                         "linear = play the window straight through")
     cp.set_defaults(func=cmd_cut)
 
     rp = sub.add_parser("render", help="render cut candidates to 9:16 MP4")
@@ -224,7 +225,8 @@ def main():
     ap.add_argument("--model", default="", help="override the OpenRouter model")
     ap.add_argument("--mood", default="", help="brand.py mood preset")
     ap.add_argument("--edit", default="", choices=["", "linear", "loop"],
-                    help="loop = payoff-first cold open that repeats seamlessly")
+                    help="loop (DEFAULT) = payoff-first cold open that repeats "
+                         "seamlessly; linear = straight through")
     ap.set_defaults(func=cmd_run)
 
     sub.add_parser("sources", help="list ingested long-form sources").set_defaults(

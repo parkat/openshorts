@@ -109,6 +109,16 @@ ssh gpu-pc 'sudo docker exec openshorts-backend python -m clips <cmd>'
 Only `moments` spends (one LLM call per ~40k chars of transcript). `ingest` costs one
 download; `cut` and `render` are local and free. `run --url ...` chains the lot.
 
+**Cuts are payoff-first loops by default** (`clips/cut.py:DEFAULT_EDIT`). Each clip is
+a *rotation* of its window about the payoff: punchline first, then the run-up, ending
+on the frame the punchline began — so the platform's auto-repeat wraps into continuous
+speech. All three boundaries (open, the punchline→run-up cut, and the wrap) are aligned
+to whole sentences by one whisper pass in `plan_window`. A moment with no usable payoff
+falls back to `linear` and logs why. Force either with `--edit linear|loop`.
+
+Caveat: whisper's punctuation shifts with how much audio it is given, so re-cutting the
+same candidate can pick a different (still sentence-aligned) split.
+
 **HTTP API / dashboard** — `openshorts.parkat.us` (Cloudflare Access), or curl
 `localhost:8000/api/explainer/*` on the box. Stage routes return `{job_id}`; poll
 `/api/explainer/jobs/{id}`. See `explainer_routes.py`.

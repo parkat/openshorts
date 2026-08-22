@@ -187,7 +187,10 @@ class ClipCandidate(Base):
     # (start_s, end_s). `edit` picks the assembly — "linear" plays the window as
     # cut; "loop" rotates it about payoff_s so the clip opens on the punchline.
     payoff_s = Column(Float, default=0.0)
-    edit = Column(String, default="linear")    # linear|loop
+    # Defaults to "loop" — the payoff-first rotation is the house cut. On an uncut
+    # candidate this is the INTENT; once cut it is the RECORD of what was actually
+    # assembled, which is why a loop that fell back writes "linear" back here.
+    edit = Column(String, default="loop")      # linear|loop
     clip_path = Column(String, default="")     # cut 16:9 source clip
     audio_path = Column(String, default="")    # extracted master audio
     captions = Column(JSON, default=list)      # [{text,startMs,endMs}] word-level

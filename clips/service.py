@@ -157,6 +157,7 @@ def run_cut(candidate_id, edit=None, log=print):
     stored value is used when it is None, so re-cutting keeps whatever you chose.
     """
     from clips import cut as ct
+    from clips.cut import DEFAULT_EDIT
     from clips.render import cand_dir
 
     with store.session() as s:
@@ -164,7 +165,7 @@ def run_cut(candidate_id, edit=None, log=print):
         src = get_source(s, cand.source_id)
         start, end = cand.start_s, cand.end_s
         payoff = cand.payoff_s or 0.0
-        edit = edit or cand.edit or "linear"
+        edit = edit or cand.edit or DEFAULT_EDIT
         source_path, uploader = src.local_path, src.uploader
         title = cand.title
     if not source_path or not os.path.isfile(source_path):
