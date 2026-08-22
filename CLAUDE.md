@@ -12,6 +12,7 @@ OpenShorts is an AI-powered vertical video generator that transforms long YouTub
 - **`OPENROUTER`** (one key: LLM/image/video/TTS via `openrouter_client.py`) and **`BUFFER`** live server-side in `openshorts/.env`.
 - **`HANDOFF-explainer-pipeline.md`** (repo root) is the source of truth for the new **Explainer lane** build (SQLite store, `explainer/` package, CLI + dashboard drivers). Read its §0 reconciliation first.
 - **`OPERATING.md`** (repo root) — how to actually reach and drive the box (SSH paths, deploy commands, gotchas). **Read it before running anything against the deployment.**
+- **Three lanes, one stack.** `/api/process` + `main.py` = the original clip generator (in-memory jobs). `explainer/` = script-first AI explainers. `clips/` = source-first clipping of long-form video. They share `store.py`, the render-service, and `brand.py`; they are parallel lanes, not layers — don't repurpose one for another.
 
 ## Development Commands
 
@@ -62,6 +63,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 | `s3_uploader.py` | AWS S3 upload with caching |
 | `subtitles.py` | SRT generation, FFmpeg subtitle burning, and dubbed video transcription |
 | `translate.py` | ElevenLabs dubbing API for AI voice translation |
+| `clips/` | **Clips lane** — mine ONE long video for many standalone Shorts (`ingest`→`moments`→`cut`→`render`), SQLite-durable, `python -m clips` |
 | `dashboard/src/App.jsx` | Main React component with state management |
 | `dashboard/src/components/TranslateModal.jsx` | Voice dubbing UI with language selection |
 

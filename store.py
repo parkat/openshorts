@@ -143,6 +143,55 @@ class CacheItem(Base):
     last_used_at = Column(DateTime, default=_now, onupdate=_now)
 
 
+class ClipSource(Base):
+    """One long-form video being mined for Shorts (the `clips` lane).
+
+    Downloaded ONCE to the content cache; every candidate window is then cut from
+    that local file, so a 12-clip batch costs exactly one YouTube fetch (the box's
+    IP gets rate-limited after ~5-8 section fetches). See clips/ingest.py.
+    """
+    __tablename__ = "clip_sources"
+    id = Column(Integer, primary_key=True)
+    url = Column(String, nullable=False)
+    video_id = Column(String, default="", index=True)
+    title = Column(String, default="")
+    uploader = Column(String, default="")
+    duration_s = Column(Float, default=0.0)
+    local_path = Column(String, default="")    # cached full download
+    vtt_path = Column(String, default="")      # timed transcript used to find moments
+    transcript_source = Column(String, default="")  # vtt|asr — captions can be lossy
+    status = Column(String, default="new")     # new|ingested|scanned
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+
+class ClipCandidate(Base):
+    """One proposed Short cut from a ClipSource — the unit of the review queue.
+
+    `start_s`/`end_s` are the window as the model proposed it; `cut.py` snaps them
+    to real speech boundaries and writes the snapped values back, so the row always
+    reflects what was actually cut.
+    """
+    __tablename__ = "clip_candidates"
+    id = Column(Integer, primary_key=True)
+    source_id = Column(Integer, ForeignKey("clip_sources.id"), index=True)
+    start_s = Column(Float, default=0.0)
+    end_s = Column(Float, default=0.0)
+    title = Column(String, default="")         # publish title
+    hook = Column(String, default="")          # opening line / on-screen hook
+    quote = Column(Text, default="")           # what is actually said in the window
+    reason = Column(Text, default="")          # why the model picked it
+    score = Column(Float, default=0.0)         # model's 0-1 confidence it lands
+    mood = Column(String, default="")          # brand.py MOODS key (theme/palette)
+    clip_path = Column(String, default="")     # cut 16:9 source clip
+    audio_path = Column(String, default="")    # extracted master audio
+    captions = Column(JSON, default=list)      # [{text,startMs,endMs}] word-level
+    render_path = Column(String, default="")   # finished 9:16 MP4
+    status = Column(String, default="candidate")  # candidate|cut|rendered|approved|rejected
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+
 def init_db():
     Base.metadata.create_all(engine)
     return DB_PATH
