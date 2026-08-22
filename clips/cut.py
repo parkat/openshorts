@@ -21,9 +21,13 @@ by construction rather than by careful trimming, and a viewer who lets it repeat
 slides back into the punchline without a seam to notice.
 """
 import os
+import re
 import json
 import tempfile
 import subprocess
+
+# Both halves of a rotation need real material; a 3s stub reads as a glitch.
+MIN_PART = 3.0
 
 
 def _run(cmd):
@@ -52,36 +56,60 @@ def cut_window(source_path, start_s, end_s, out_path):
     return out_path
 
 
-def snap_point(source_path, t, max_shift=1.5, log=print):
-    """Move a mid-window split point to the nearest word start after a pause.
+# A word ending a sentence, allowing for a trailing quote/bracket.
+_SENTENCE_END = re.compile(r"[.!?…][\"'\)\]]*$")
 
-    The rotation cuts here twice — it opens the clip AND closes it — so landing
-    mid-syllable is heard twice. Returns `t` unchanged on any failure.
+
+def snap_point(source_path, t, max_shift=8.0, log=print):
+    """Move the loop split to the start of a SENTENCE, or refuse.
+
+    A word boundary is not good enough here. The split becomes the first frame of
+    the Short, so landing inside a sentence opens the video on a fragment
+    ("unleashed AI-powered bots...") — grammatically broken and a weak hook.
+
+    Preference is the start of the sentence CONTAINING `t`, not the nearest
+    boundary in either direction: the model points at where the punchline lands,
+    so the sentence it points into is the punchline, and opening at that
+    sentence's start keeps its subject. Only if that is out of reach do we take
+    the next sentence forward.
+
+    Returns None when no sentence start is within `max_shift` — the caller then
+    cuts linear, because an awkward open is worse than no loop.
     """
     try:
         from explainer.assets import snap as sn
-        region_start = max(0.0, float(t) - sn.PAD)
+        pad = max_shift + 3.0
+        region_start = max(0.0, float(t) - pad)
         with tempfile.TemporaryDirectory() as td:
             wav = os.path.join(td, "region.wav")
-            if not sn._extract_wav(source_path, region_start, sn.PAD * 2, wav):
-                return float(t)
+            if not sn._extract_wav(source_path, region_start, pad * 2, wav):
+                return None
             words = sn._words(wav)
-        if not words:
-            return float(t)
-        rel = sn._best_start(words, float(t) - region_start)
-        if rel is None:
-            return float(t)
-        # No EDGE_PAD here. At an outer edge that pad keeps a sliver of silence
-        # around the speech we kept; at an internal split the SAME instant is both
-        # the run-up's end and the punchline's start, so padding it backwards
-        # leaves the word's onset at the head of the punchline while its full
-        # self ends the run-up — an audible stutter across the loop seam.
-        snapped = region_start + rel
-        if abs(snapped - float(t)) > max_shift:
-            return float(t)
-        return snapped
+        if len(words) < 2:
+            return None
+
+        # A word starts a sentence when the PREVIOUS word closed one. The region's
+        # own first word is excluded — it is mid-sentence by construction.
+        starts = [region_start + words[i][0] for i in range(1, len(words))
+                  if _SENTENCE_END.search(words[i - 1][2])]
+        if not starts:
+            return None
+
+        t = float(t)
+        before = [x for x in starts if x <= t + 0.25]
+        after = [x for x in starts if x > t + 0.25]
+        pick = None
+        if before and (t - before[-1]) <= max_shift:
+            pick = before[-1]          # start of the sentence t falls inside
+        elif after and (after[0] - t) <= max_shift:
+            pick = after[0]            # else the next sentence along
+        if pick is None:
+            return None
+        if pick != t:
+            log(f"  payoff {t:.2f} was mid-sentence -> sentence start {pick:.2f}")
+        return pick
     except Exception:  # noqa: BLE001 — snapping must never break the cut
-        return float(t)
+        return None
 
 
 def rotate(clip_path, split_s, out_path):
@@ -169,11 +197,17 @@ def build(source_path, start_s, end_s, out_dir, payoff_s=0.0, edit="linear",
     payoff = float(payoff_s or 0.0)
     looped = False
     if edit == "loop" and s < payoff < e:
-        payoff = snap_point(source_path, payoff, log=log)
-        # Re-check after snapping — it can drift toward an edge.
-        if not (s + 1.0 < payoff < e - 1.0):
-            log(f"  payoff {payoff:.2f} too close to an edge after snapping — cutting linear")
+        snapped = snap_point(source_path, payoff, log=log)
+        if snapped is None:
+            log(f"  no sentence boundary near the payoff ({payoff:.2f}) — cutting linear "
+                "rather than opening on a fragment")
+            payoff = 0.0
+        elif not (s + MIN_PART <= snapped <= e - MIN_PART):
+            log(f"  sentence start {snapped:.2f} leaves under {MIN_PART:.0f}s on one "
+                "side — cutting linear")
+            payoff = 0.0
         else:
+            payoff = snapped
             linear = cut_window(source_path, s, e, os.path.join(out_dir, "linear.mp4"))
             split = payoff - s
             rotate(linear, split, clip_path)

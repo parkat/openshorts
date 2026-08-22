@@ -61,13 +61,22 @@ setup, keep that sentence and cut everything before it. A viewer decides in abou
 second; a clip that opens on "so, what is a neural network" is already dead.
 END ON THE LANDING. Set `out` right after the payoff, not on whatever came next.
 
-MARK THE PAYOFF. Also return `payoff`: the exact second the punchline STARTS — the
-reveal, the number, the admission, the line the whole window exists to deliver.
-Everything before it is the run-up. This lets the editor rotate the clip so it opens
-on the punchline and loops back into it, so be precise: `payoff` must fall on a
-sentence boundary strictly between `in` and `out`, with at least 3 seconds of run-up
-before it and at least 3 seconds of punchline after it. If the window has no such
-single moment — the whole thing is one continuous build — return `payoff: 0`.
+MARK THE PAYOFF. Also return `payoff`: the second the punchline STARTS — the reveal,
+the number, the admission, the line the whole window exists to deliver. Everything
+before it is the run-up.
+
+The editor rotates the clip so it opens on the punchline and loops back into it, so
+`payoff` becomes the FIRST FRAME of the Short. It must therefore be the start of a
+COMPLETE SENTENCE — the first word of it, including that sentence's own subject.
+Never point at the middle of a sentence: opening on "unleashed AI-powered bots..."
+is a fragment, where "Without permission, they unleashed AI-powered bots..." is a
+hook. If the punchline sentence begins with a conjunction or a pronoun that refers
+back to the run-up ("And that's when...", "So he..."), that is fine — it still reads
+as a sentence.
+
+Constraints: strictly between `in` and `out`, at least 3 seconds of run-up before it
+and at least 3 seconds of punchline after it. If the window has no such single
+moment — the whole thing is one continuous build — return `payoff: 0`.
 
 Hard constraints:
 - each window is 12-60 seconds; the best are 20-40;
