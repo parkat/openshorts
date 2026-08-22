@@ -35,7 +35,7 @@ export const clipsApi = {
   // stage runners → { job_id }
   ingest: (url) => postJson('/ingest', { url }),
   moments: (sourceId, opts = {}) => postJson('/moments', { source_id: sourceId, ...opts }),
-  cut: (candidateId) => postJson('/cut', { candidate_id: candidateId }),
+  cut: (candidateId, opts = {}) => postJson('/cut', { candidate_id: candidateId, ...opts }),
   render: (candidateId, opts = {}) => postJson('/render', { candidate_id: candidateId, ...opts }),
   run: (url, opts = {}) => postJson('/run', { url, ...opts }),
   // direct actions
@@ -56,6 +56,14 @@ export const STATUS_TINT = {
 
 // brand.py MOODS — the render theme. '' = the brand default.
 export const MOODS = ['', 'dark', 'teach'];
+
+// How the window is assembled. `loop` rotates the clip about its payoff point so
+// it opens on the punchline and ends where the punchline began — the wrap back to
+// the start is continuous speech, so a repeat plays as one unbroken take.
+export const EDITS = [
+  { value: 'linear', label: 'Linear' },
+  { value: 'loop', label: 'Loop (payoff first)' },
+];
 
 export function fmtClock(seconds) {
   const s = Math.max(0, Math.floor(Number(seconds) || 0));

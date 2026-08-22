@@ -61,6 +61,14 @@ setup, keep that sentence and cut everything before it. A viewer decides in abou
 second; a clip that opens on "so, what is a neural network" is already dead.
 END ON THE LANDING. Set `out` right after the payoff, not on whatever came next.
 
+MARK THE PAYOFF. Also return `payoff`: the exact second the punchline STARTS — the
+reveal, the number, the admission, the line the whole window exists to deliver.
+Everything before it is the run-up. This lets the editor rotate the clip so it opens
+on the punchline and loops back into it, so be precise: `payoff` must fall on a
+sentence boundary strictly between `in` and `out`, with at least 3 seconds of run-up
+before it and at least 3 seconds of punchline after it. If the window has no such
+single moment — the whole thing is one continuous build — return `payoff: 0`.
+
 Hard constraints:
 - each window is 12-60 seconds; the best are 20-40;
 - `in` and `out` are seconds from the transcript timestamps, on sentence boundaries;
@@ -80,9 +88,11 @@ For each moment return:
   hits, not a summary of the content.
 - "score": 0-1, your honest estimate it gets watched to the end AND shared. Be harsh.
   0.9 means you would bet on it. Most segments of most videos are below 0.5.
+- "payoff": the second the punchline starts (see MARK THE PAYOFF), or 0 if there is
+  no single such moment.
 
 Return ONLY valid JSON (no markdown):
-{"moments":[{"in":<sec>,"out":<sec>,"title":"...","hook":"...","quote":"...","why":"...","score":<0-1>}]}"""
+{"moments":[{"in":<sec>,"out":<sec>,"payoff":<sec>,"title":"...","hook":"...","quote":"...","why":"...","score":<0-1>}]}"""
 
 
 def _extract_json(text):
@@ -123,6 +133,29 @@ def chunk(segments, chunk_chars=CHUNK_CHARS, overlap_s=CHUNK_OVERLAP_S):
     if cur and (not runs or cur[-1] is not runs[-1][-1]):
         runs.append(cur)
     return runs
+
+
+# A loop edit needs real material on both sides of the split — a 1s run-up or a
+# 1s punchline reads as a glitch, not a hook.
+MIN_LOOP_PART = 3.0
+
+
+def clean_payoff(m):
+    """Zero out a payoff that can't produce a sane rotation. Mutates and returns m.
+
+    A moment with an unusable payoff point is still a perfectly good linear clip,
+    so this drops the payoff rather than the moment.
+    """
+    try:
+        p = float(m.get("payoff") or 0)
+        a, b = float(m["in"]), float(m["out"])
+    except (TypeError, ValueError, KeyError):
+        m["payoff"] = 0.0
+        return m
+    if not (a + MIN_LOOP_PART <= p <= b - MIN_LOOP_PART):
+        p = 0.0
+    m["payoff"] = p
+    return m
 
 
 def valid(m, duration_s):
@@ -169,7 +202,7 @@ def find(segments, duration_s=0.0, limit=0, model=None, key=None, log=print):
             model=model or orc.MODELS["polish"], temperature=0.4,
             max_tokens=MAX_TOKENS, key=key)
         got = _extract_json(out).get("moments") or []
-        keep = [m for m in got if valid(m, duration_s)]
+        keep = [clean_payoff(m) for m in got if valid(m, duration_s)]
         if len(keep) != len(got):
             log(f"  pass {i}: dropped {len(got) - len(keep)} out-of-bounds window(s)")
         log(f"  pass {i}: {len(keep)} moment(s)")

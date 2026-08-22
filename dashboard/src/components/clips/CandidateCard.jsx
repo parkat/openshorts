@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
 import {
-  Scissors, Clapperboard, Check, X, Trash2, ChevronDown, ChevronUp, Download,
+  Scissors, Clapperboard, Check, X, Trash2, ChevronDown, ChevronUp, Download, Repeat,
 } from 'lucide-react';
 import { clipsApi, STATUS_TINT, fmtClock, getApiUrl } from './api';
 
 // One proposed Short. Shows the model's case for the moment (score, why, the
 // words actually spoken) so the call to cut it is made on evidence, and plays
 // the render inline once there is one.
-export default function CandidateCard({ candidate: c, mood, busy, onRun, onChanged }) {
+export default function CandidateCard({ candidate: c, mood, edit, busy, onRun, onChanged }) {
   const [open, setOpen] = useState(false);
   const rendered = c.status === 'rendered' || c.status === 'approved' || c.status === 'rejected';
   const isCut = c.status === 'cut' || rendered;
@@ -21,8 +21,20 @@ export default function CandidateCard({ candidate: c, mood, busy, onRun, onChang
         <div className="flex-1 min-w-0">
           <p className="text-white font-medium leading-snug">{c.title || '(untitled)'}</p>
           {c.hook && <p className="text-xs text-cyan-300/80 mt-1 italic">“{c.hook}”</p>}
-          <p className="text-[11px] text-zinc-500 mt-1.5 font-mono">
-            {fmtClock(c.start_s)}–{fmtClock(c.end_s)} · {c.seconds}s
+          <p className="text-[11px] text-zinc-500 mt-1.5 font-mono flex items-center gap-2">
+            <span>{fmtClock(c.start_s)}–{fmtClock(c.end_s)} · {c.seconds}s</span>
+            {c.payoff_s > 0 && (
+              <span
+                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${
+                  c.edit === 'loop' ? 'bg-cyan-500/15 text-cyan-300' : 'bg-white/5 text-zinc-500'
+                }`}
+                title={c.edit === 'loop'
+                  ? `Cut as a loop: opens on the payoff at ${fmtClock(c.payoff_s)}`
+                  : `Payoff starts at ${fmtClock(c.payoff_s)} — can be cut as a loop`}
+              >
+                <Repeat size={10} /> {fmtClock(c.payoff_s)}
+              </span>
+            )}
           </p>
         </div>
         <div className="flex flex-col items-end gap-1.5 shrink-0">
@@ -48,18 +60,18 @@ export default function CandidateCard({ candidate: c, mood, busy, onRun, onChang
       )}
 
       <div className="flex flex-wrap items-center gap-2 mt-3">
-        {!isCut && (
-          <button
-            onClick={() => onRun(() => clipsApi.cut(c.id), `cut #${c.id}`)}
-            disabled={busy}
-            className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-300 disabled:opacity-40 transition-colors"
-          >
-            <Scissors size={13} /> Cut
-          </button>
-        )}
+        <button
+          onClick={() => onRun(() => clipsApi.cut(c.id, { edit }))}
+          disabled={busy}
+          title={isCut ? `re-cut as ${edit}` : `cut as ${edit}`}
+          className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-300 disabled:opacity-40 transition-colors"
+        >
+          <Scissors size={13} /> {isCut ? 'Re-cut' : 'Cut'}
+          {edit === 'loop' && <Repeat size={11} className="text-cyan-400" />}
+        </button>
         {isCut && (
           <button
-            onClick={() => onRun(() => clipsApi.render(c.id, { mood }), `render #${c.id}`)}
+            onClick={() => onRun(() => clipsApi.render(c.id, { mood }))}
             disabled={busy}
             className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-violet-500/10 hover:bg-violet-500/20 text-violet-300 disabled:opacity-40 transition-colors"
           >

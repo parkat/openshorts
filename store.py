@@ -183,6 +183,11 @@ class ClipCandidate(Base):
     reason = Column(Text, default="")          # why the model picked it
     score = Column(Float, default=0.0)         # model's 0-1 confidence it lands
     mood = Column(String, default="")          # brand.py MOODS key (theme/palette)
+    # Loop edit: `payoff_s` is the absolute second the punchline starts, inside
+    # (start_s, end_s). `edit` picks the assembly — "linear" plays the window as
+    # cut; "loop" rotates it about payoff_s so the clip opens on the punchline.
+    payoff_s = Column(Float, default=0.0)
+    edit = Column(String, default="linear")    # linear|loop
     clip_path = Column(String, default="")     # cut 16:9 source clip
     audio_path = Column(String, default="")    # extracted master audio
     captions = Column(JSON, default=list)      # [{text,startMs,endMs}] word-level
@@ -192,8 +197,38 @@ class ClipCandidate(Base):
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
 
+def _add_missing_columns():
+    """Add columns declared on a model but absent from an existing table.
+
+    `create_all` only ever CREATEs — it will not ALTER a table that already
+    exists, so a new column on a live DB is silently missing until something
+    SELECTs it and blows up. SQLite can only add columns (never drop or retype),
+    which is exactly the migration this store needs, so handle that one case
+    here rather than taking on Alembic.
+    """
+    from sqlalchemy import text
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            have = {r[1] for r in conn.execute(
+                text(f"PRAGMA table_info('{table.name}')"))}
+            if not have:
+                continue  # table doesn't exist yet; create_all handles it
+            for col in table.columns:
+                if col.name in have:
+                    continue
+                ddl = col.type.compile(engine.dialect)
+                default = ""
+                if col.default is not None and getattr(col.default, "is_scalar", False):
+                    val = col.default.arg
+                    default = f" DEFAULT {val!r}" if isinstance(val, str) else f" DEFAULT {val}"
+                conn.execute(text(
+                    f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {ddl}{default}'))
+                print(f"store: added {table.name}.{col.name}")
+
+
 def init_db():
     Base.metadata.create_all(engine)
+    _add_missing_columns()
     return DB_PATH
 
 

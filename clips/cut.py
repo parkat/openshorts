@@ -12,9 +12,17 @@ The clip keeps its full 16:9 frame. It is never cropped to 9:16 — the render l
 it over a blurred, zoomed copy of itself, so nobody gets cut out of frame (a
 face-centred reframe was tried and abandoned: on a panel it centres on whoever is
 largest, not whoever is talking).
+
+`edit="loop"` assembles the window as a **rotation** about the payoff point: the
+punchline plays first, then the run-up that led to it, ending on the exact frame
+the punchline began. Because the two halves are contiguous in the source, the
+wrap from the end back to the start is continuous speech — the loop is seamless
+by construction rather than by careful trimming, and a viewer who lets it repeat
+slides back into the punchline without a seam to notice.
 """
 import os
 import json
+import tempfile
 import subprocess
 
 
@@ -41,6 +49,56 @@ def cut_window(source_path, start_s, end_s, out_path):
               "-c:a", "aac", "-movflags", "+faststart", out_path])
     if r.returncode != 0 or not os.path.isfile(out_path):
         raise RuntimeError(f"ffmpeg cut failed: {r.stderr.decode(errors='replace')[-300:]}")
+    return out_path
+
+
+def snap_point(source_path, t, max_shift=1.5, log=print):
+    """Move a mid-window split point to the nearest word start after a pause.
+
+    The rotation cuts here twice — it opens the clip AND closes it — so landing
+    mid-syllable is heard twice. Returns `t` unchanged on any failure.
+    """
+    try:
+        from explainer.assets import snap as sn
+        region_start = max(0.0, float(t) - sn.PAD)
+        with tempfile.TemporaryDirectory() as td:
+            wav = os.path.join(td, "region.wav")
+            if not sn._extract_wav(source_path, region_start, sn.PAD * 2, wav):
+                return float(t)
+            words = sn._words(wav)
+        if not words:
+            return float(t)
+        rel = sn._best_start(words, float(t) - region_start)
+        if rel is None:
+            return float(t)
+        snapped = region_start + rel - sn.EDGE_PAD
+        if abs(snapped - float(t)) > max_shift:
+            return float(t)
+        return snapped
+    except Exception:  # noqa: BLE001 — snapping must never break the cut
+        return float(t)
+
+
+def rotate(clip_path, split_s, out_path):
+    """Reorder a clip to [split..end] + [start..split].
+
+    Done with trim/concat filters on the already-cut window rather than two cuts
+    of the original: the window is seconds long, so this is fast and frame-exact,
+    where seeking a 25-minute source twice is neither.
+    """
+    fc = (
+        f"[0:v]trim=start={split_s:.3f},setpts=PTS-STARTPTS[v0];"
+        f"[0:a]atrim=start={split_s:.3f},asetpts=PTS-STARTPTS[a0];"
+        f"[0:v]trim=start=0:end={split_s:.3f},setpts=PTS-STARTPTS[v1];"
+        f"[0:a]atrim=start=0:end={split_s:.3f},asetpts=PTS-STARTPTS[a1];"
+        f"[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]"
+    )
+    r = _run(["ffmpeg", "-y", "-i", clip_path, "-filter_complex", fc,
+              "-map", "[v]", "-map", "[a]",
+              "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+              "-c:a", "aac", "-movflags", "+faststart", out_path])
+    if r.returncode != 0 or not os.path.isfile(out_path):
+        raise RuntimeError(f"ffmpeg rotate failed: {r.stderr.decode(errors='replace')[-300:]}")
     return out_path
 
 
@@ -89,20 +147,50 @@ def captions(audio_path, log=print):
     return words
 
 
-def build(source_path, start_s, end_s, out_dir, log=print):
-    """Snap -> cut -> extract audio -> caption. Returns the manifest dict."""
+def build(source_path, start_s, end_s, out_dir, payoff_s=0.0, edit="linear",
+          log=print):
+    """Snap -> cut -> (rotate) -> extract audio -> caption. Returns the manifest.
+
+    Captions are always transcribed from the FINAL assembled audio, so a rotated
+    clip's captions follow the rotated order automatically — there is no separate
+    timeline to keep in step.
+    """
     os.makedirs(out_dir, exist_ok=True)
     s, e = snap(source_path, start_s, end_s, log=log)
     if (s, e) != (float(start_s), float(end_s)):
         log(f"  snapped {float(start_s):.2f}-{float(end_s):.2f} -> {s:.2f}-{e:.2f}")
 
-    clip = cut_window(source_path, s, e, os.path.join(out_dir, "clip.mp4"))
-    audio = extract_audio(clip, os.path.join(out_dir, "audio.wav"))
-    dur = duration_s(clip) or (e - s)
+    clip_path = os.path.join(out_dir, "clip.mp4")
+    payoff = float(payoff_s or 0.0)
+    looped = False
+    if edit == "loop" and s < payoff < e:
+        payoff = snap_point(source_path, payoff, log=log)
+        # Re-check after snapping — it can drift toward an edge.
+        if not (s + 1.0 < payoff < e - 1.0):
+            log(f"  payoff {payoff:.2f} too close to an edge after snapping — cutting linear")
+        else:
+            linear = cut_window(source_path, s, e, os.path.join(out_dir, "linear.mp4"))
+            split = payoff - s
+            rotate(linear, split, clip_path)
+            os.remove(linear)
+            looped = True
+            log(f"  loop: opens on payoff at {payoff:.2f} "
+                f"({e - payoff:.1f}s punchline + {split:.1f}s run-up)")
+    elif edit == "loop":
+        log(f"  no usable payoff point for #loop ({payoff:.2f} outside "
+            f"{s:.2f}-{e:.2f}) — cutting linear")
+
+    if not looped:
+        cut_window(source_path, s, e, clip_path)
+
+    audio = extract_audio(clip_path, os.path.join(out_dir, "audio.wav"))
+    dur = duration_s(clip_path) or (e - s)
     words = captions(audio, log=log)
 
     manifest = {"start_s": s, "end_s": e, "duration_s": dur,
-                "clip": clip, "audio": audio, "captions": words}
+                "payoff_s": payoff if looped else 0.0,
+                "edit": "loop" if looped else "linear",
+                "clip": clip_path, "audio": audio, "captions": words}
     with open(os.path.join(out_dir, "cut.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
     return manifest

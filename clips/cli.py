@@ -71,8 +71,9 @@ def cmd_moments(args):
     res = service.run_moments(args.source_id, limit=args.limit,
                               model=(args.model or None), from_file=args.from_file)
     for c in service.list_candidates(source_id=res["source_id"]):
+        loop = f" ⟲{_fmt_hms(c['payoff_s'])}" if c.get('payoff_s') else ""
         print(f"  #{c['id']} [{c['score']:.2f}] {_fmt_hms(c['start_s'])}"
-              f"-{_fmt_hms(c['end_s'])} ({c['seconds']}s)  {c['title']}")
+              f"-{_fmt_hms(c['end_s'])} ({c['seconds']}s){loop}  {c['title']}")
 
 
 def cmd_cut(args):
@@ -80,7 +81,7 @@ def cmd_cut(args):
     from clips import service
     for cid in _candidate_ids(args, service):
         try:
-            service.run_cut(cid)
+            service.run_cut(cid, edit=(args.edit or None))
         except (ValueError, FileNotFoundError, RuntimeError) as e:
             print(f"  ✗ #{cid}: {e}")
 
@@ -109,7 +110,7 @@ def cmd_run(args):
         return
     for cid in got["candidate_ids"]:
         try:
-            service.run_cut(cid)
+            service.run_cut(cid, edit=(args.edit or None))
             service.run_render(cid, mood=(args.mood or None))
         except (ValueError, FileNotFoundError, RuntimeError, TimeoutError) as e:
             print(f"  ✗ #{cid}: {e}")
@@ -159,6 +160,8 @@ def cmd_show(args):
     print(f"  title  : {c['title']}")
     print(f"  hook   : {c['hook']}")
     print(f"  score  : {c['score']:.2f}")
+    print(f"  edit   : {c.get('edit', 'linear')}"
+          + (f" (payoff at {_fmt_hms(c['payoff_s'])})" if c.get('payoff_s') else ""))
     print(f"  why    : {c['reason']}")
     print(f"  quote  : {c['quote']}")
     if c["render_path"]:
@@ -201,6 +204,9 @@ def main():
     cp.add_argument("--candidate-id", type=int, default=0)
     cp.add_argument("--source-id", type=int, default=0)
     cp.add_argument("--all", action="store_true", help="every uncut candidate of --source-id")
+    cp.add_argument("--edit", default="", choices=["", "linear", "loop"],
+                    help="loop = open on the payoff, then the run-up, ending where "
+                         "the payoff began (seamless repeat)")
     cp.set_defaults(func=cmd_cut)
 
     rp = sub.add_parser("render", help="render cut candidates to 9:16 MP4")
@@ -217,6 +223,8 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="keep only the top N by score")
     ap.add_argument("--model", default="", help="override the OpenRouter model")
     ap.add_argument("--mood", default="", help="brand.py mood preset")
+    ap.add_argument("--edit", default="", choices=["", "linear", "loop"],
+                    help="loop = payoff-first cold open that repeats seamlessly")
     ap.set_defaults(func=cmd_run)
 
     sub.add_parser("sources", help="list ingested long-form sources").set_defaults(

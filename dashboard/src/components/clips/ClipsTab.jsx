@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   Scissors, RotateCcw, AlertTriangle, Search, Zap, Trash2, Film, Wand2,
 } from 'lucide-react';
-import { clipsApi, MOODS, fmtClock } from './api';
+import { clipsApi, MOODS, EDITS, fmtClock } from './api';
 import useClipsJob from './useClipsJob';
 import JobLog from './JobLog';
 import CandidateCard from './CandidateCard';
@@ -16,6 +16,7 @@ export default function ClipsTab() {
   const [url, setUrl] = useState('');
   const [limit, setLimit] = useState(0);
   const [mood, setMood] = useState('');
+  const [edit, setEdit] = useState('linear');
   const [sources, setSources] = useState([]);
   const [selected, setSelected] = useState(null);
   const [candidates, setCandidates] = useState([]);
@@ -80,7 +81,7 @@ export default function ClipsTab() {
 
   const runEverything = () => {
     if (!url.trim()) { setError('paste a video URL first'); return; }
-    run(() => clipsApi.run(url.trim(), { limit: Number(limit) || 0, mood }));
+    run(() => clipsApi.run(url.trim(), { limit: Number(limit) || 0, mood, edit }));
   };
 
   const scanSelected = () => {
@@ -147,6 +148,16 @@ export default function ClipsTab() {
                   {MOODS.map((m) => <option key={m} value={m}>{m || 'brand default'}</option>)}
                 </select>
               </div>
+              <div>
+                <label className="block text-xs text-zinc-500 mb-1.5">Edit</label>
+                <select
+                  value={edit}
+                  onChange={(e) => setEdit(e.target.value)}
+                  className="input-field py-2 text-sm w-44"
+                >
+                  {EDITS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
               <div className="flex gap-2 ml-auto">
                 <button
                   onClick={findMoments}
@@ -168,6 +179,13 @@ export default function ClipsTab() {
               <strong>Ingest</strong> downloads the video once and builds its transcript — then scan
               it for moments below. <strong>Run everything</strong> chains ingest → moments → cut →
               render. Only the moment scan costs money; cutting and rendering are local.
+              {edit === 'loop' && (
+                <>
+                  {' '}<strong>Loop</strong> opens each clip on its payoff, then plays the run-up
+                  and ends on the frame the payoff began — so a repeat runs straight back into
+                  the punchline with no seam. Needs a payoff point (⟲) on the moment.
+                </>
+              )}
             </p>
           </div>
 
@@ -252,6 +270,7 @@ export default function ClipsTab() {
                       key={c.id}
                       candidate={c}
                       mood={mood}
+                      edit={edit}
                       busy={running}
                       onRun={(starter) => run(starter)}
                       onChanged={() => loadCandidates(selected)}

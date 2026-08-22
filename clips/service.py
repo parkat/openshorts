@@ -134,7 +134,8 @@ def run_moments(source_id, limit=0, model=None, from_file="", log=print):
                 source_id=source_id, start_s=float(m["in"]), end_s=float(m["out"]),
                 title=(m.get("title") or "")[:200], hook=(m.get("hook") or "")[:200],
                 quote=m.get("quote") or "", reason=m.get("why") or "",
-                score=float(m.get("score") or 0.0))
+                score=float(m.get("score") or 0.0),
+                payoff_s=float(m.get("payoff") or 0.0))
             s.add(row)
             s.flush()
             ids.append(row.id)
@@ -149,8 +150,12 @@ def run_moments(source_id, limit=0, model=None, from_file="", log=print):
     return {"source_id": source_id, "candidate_ids": ids, "count": len(ids)}
 
 
-def run_cut(candidate_id, log=print):
-    """Snap, cut, extract audio and caption one candidate."""
+def run_cut(candidate_id, edit=None, log=print):
+    """Snap, cut, extract audio and caption one candidate.
+
+    `edit` overrides the candidate's stored assembly ("linear" or "loop"); the
+    stored value is used when it is None, so re-cutting keeps whatever you chose.
+    """
     from clips import cut as ct
     from clips.render import cand_dir
 
@@ -158,25 +163,30 @@ def run_cut(candidate_id, log=print):
         cand = get_candidate(s, candidate_id)
         src = get_source(s, cand.source_id)
         start, end = cand.start_s, cand.end_s
+        payoff = cand.payoff_s or 0.0
+        edit = edit or cand.edit or "linear"
         source_path, uploader = src.local_path, src.uploader
         title = cand.title
     if not source_path or not os.path.isfile(source_path):
         raise FileNotFoundError(
             f"source download missing ({source_path or 'unset'}) — re-run `ingest`")
 
-    log(f"cutting #{candidate_id}: {title or '(untitled)'}")
-    man = ct.build(source_path, start, end, cand_dir(candidate_id), log=log)
+    log(f"cutting #{candidate_id} [{edit}]: {title or '(untitled)'}")
+    man = ct.build(source_path, start, end, cand_dir(candidate_id),
+                   payoff_s=payoff, edit=edit, log=log)
 
     with store.session() as s:
         cand = get_candidate(s, candidate_id)
         cand.start_s, cand.end_s = man["start_s"], man["end_s"]
+        cand.payoff_s, cand.edit = man["payoff_s"], man["edit"]
         cand.clip_path, cand.audio_path = man["clip"], man["audio"]
         cand.captions = man["captions"]
         cand.status = "cut"
         s.commit()
     log(f"  cut {man['duration_s']:.1f}s -> {man['clip']}")
     return {"candidate_id": candidate_id, "duration_s": man["duration_s"],
-            "words": len(man["captions"]), "uploader": uploader}
+            "words": len(man["captions"]), "edit": man["edit"],
+            "uploader": uploader}
 
 
 def run_render(candidate_id, mood=None, no_wait=False, service_url=None, log=print):
@@ -219,7 +229,7 @@ def run_render(candidate_id, mood=None, no_wait=False, service_url=None, log=pri
     return {"candidate_id": candidate_id, "output": out, "status": "rendered"}
 
 
-def run_all(url, limit=0, model=None, mood=None, log=print):
+def run_all(url, limit=0, model=None, mood=None, edit=None, log=print):
     """ingest -> moments -> cut -> render, for a source you already trust.
 
     One failing candidate does not abandon the rest — a bad window should cost
@@ -231,7 +241,7 @@ def run_all(url, limit=0, model=None, mood=None, log=print):
     done, failed = [], []
     for cid in found["candidate_ids"]:
         try:
-            run_cut(cid, log=log)
+            run_cut(cid, edit=edit, log=log)
             run_render(cid, mood=mood, log=log)
             done.append(cid)
         except Exception as e:  # noqa: BLE001 — one bad window must not kill the batch
@@ -267,6 +277,7 @@ def candidate_detail(candidate_id):
             "seconds": round(c.end_s - c.start_s, 1),
             "title": c.title, "hook": c.hook, "quote": c.quote,
             "reason": c.reason, "score": c.score, "mood": c.mood,
+            "payoff_s": c.payoff_s or 0.0, "edit": c.edit or "linear",
             "clip_path": c.clip_path, "render_path": c.render_path,
             "caption_words": len(c.captions or []),
             "source": {"id": src.id, "title": src.title, "uploader": src.uploader,
@@ -331,4 +342,5 @@ def list_candidates(source_id=None, status=""):
                  "seconds": round(r.end_s - r.start_s, 1),
                  "title": r.title, "hook": r.hook, "score": r.score,
                  "reason": r.reason, "quote": r.quote,
+                 "payoff_s": r.payoff_s or 0.0, "edit": r.edit or "linear",
                  "render_path": r.render_path} for r in rows]

@@ -152,6 +152,7 @@ class MomentsBody(BaseModel):
 
 class CutBody(BaseModel):
     candidate_id: int
+    edit: str = ""
 
 
 class RenderBody(BaseModel):
@@ -164,6 +165,7 @@ class RunBody(BaseModel):
     limit: int = 0
     model: str = ""
     mood: str = ""
+    edit: str = ""
 
 
 @router.post("/ingest")
@@ -183,7 +185,7 @@ def post_moments(body: MomentsBody):
 @router.post("/cut")
 def post_cut(body: CutBody):
     return _launch("cut", body.candidate_id, service.run_cut,
-                   {"candidate_id": body.candidate_id})
+                   {"candidate_id": body.candidate_id, "edit": body.edit or None})
 
 
 @router.post("/render")
@@ -199,7 +201,8 @@ def post_run(body: RunBody):
         raise HTTPException(status_code=400, detail="url required")
     return _launch("run", 0, service.run_all,
                    {"url": body.url.strip(), "limit": body.limit,
-                    "model": body.model or None, "mood": body.mood or None})
+                    "model": body.model or None, "mood": body.mood or None,
+                    "edit": body.edit or None})
 
 
 # --- direct actions ----------------------------------------------------------
