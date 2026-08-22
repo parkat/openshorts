@@ -152,7 +152,8 @@ def plan_window(source_path, start_s, end_s, payoff_s=0.0, want_loop=False,
         if payoff is None:
             log(f"  no sentence start near the payoff ({float(payoff_s):.2f}) with "
                 f"{MIN_PART:.0f}s on both sides — cutting linear")
-        elif abs(payoff - float(payoff_s)) > 0.01:
+        elif abs(payoff - float(payoff_s)) > 0.25:
+            # Sub-frame corrections are just timing noise, not a re-choice of line.
             log(f"  payoff {float(payoff_s):.2f} was mid-sentence -> {payoff:.2f}")
 
     # Breathe outwards into the pauses around each sentence edge. The payoff gets
