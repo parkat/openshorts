@@ -186,6 +186,9 @@ class ClipCandidate(Base):
     # Loop edit: `payoff_s` is the absolute second the punchline starts, inside
     # (start_s, end_s). `edit` picks the assembly — "linear" plays the window as
     # cut; "loop" rotates it about payoff_s so the clip opens on the punchline.
+    # Which detector found it: speech (transcript) or action (motion + vision).
+    # Decides how the cut is aligned — sentences for speech, shot cuts for action.
+    kind = Column(String, default="speech")    # speech|action
     payoff_s = Column(Float, default=0.0)
     # Defaults to "loop" — the payoff-first rotation is the house cut. On an uncut
     # candidate this is the INTENT; once cut it is the RECORD of what was actually

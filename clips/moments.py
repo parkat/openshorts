@@ -169,7 +169,12 @@ def clean_payoff(m):
     return m
 
 
-def valid(m, duration_s):
+# Action clips may be much shorter than spoken ones: a crash lands in four
+# seconds, where a spoken point needs a sentence or two to arrive.
+MIN_ACTION_SECONDS = 5.0
+
+
+def valid(m, duration_s, min_seconds=MIN_SECONDS):
     try:
         a, b = float(m.get("in")), float(m.get("out"))
     except (TypeError, ValueError):
@@ -178,7 +183,7 @@ def valid(m, duration_s):
         return False
     if duration_s and b > duration_s + 1:
         return False
-    return MIN_SECONDS <= (b - a) <= MAX_SECONDS
+    return min_seconds <= (b - a) <= MAX_SECONDS
 
 
 def dedupe(moments, min_gap_s=1.0):

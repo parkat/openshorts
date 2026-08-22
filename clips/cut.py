@@ -109,18 +109,31 @@ def _pick(candidates, want, prefer_earlier, max_shift):
 
 
 def plan_window(source_path, start_s, end_s, payoff_s=0.0, want_loop=False,
-                max_shift=MAX_SHIFT, log=print):
+                kind="speech", max_shift=MAX_SHIFT, log=print):
     """Align a window (and optionally its loop split) to sentence boundaries.
 
     One whisper pass over the padded window serves all three boundaries — the
     edges and the split are all just queries against the same word list, and
     re-listening per boundary would triple the slowest part of the cut.
 
+    ACTION clips skip all of this. Their boundaries came from a vision model that
+    looked at the frames and chose where the incident reads and where its outcome
+    lands; there are no sentences to align to, and re-deriving those edges from
+    audio would replace a decision made on evidence with a guess. It also keeps
+    the cut fast, since the whisper pass is the slow part.
+
     Returns (start, end, payoff|None). Falls back to word-level snapping if the
     audio cannot be read, and returns payoff=None whenever the split cannot be put
     on a sentence.
     """
     start_s, end_s = float(start_s), float(end_s)
+    if kind == "action":
+        payoff = float(payoff_s) if (want_loop and payoff_s) else None
+        if payoff is not None and not (start_s + MIN_PART <= payoff <= end_s - MIN_PART):
+            log(f"  action payoff {payoff:.2f} leaves under {MIN_PART:.0f}s on one "
+                "side — cutting linear")
+            payoff = None
+        return start_s, end_s, payoff
     if os.environ.get("EXPLAINER_SNAP", "1") == "0":
         return start_s, end_s, (float(payoff_s) if want_loop and payoff_s else None)
 
@@ -252,7 +265,7 @@ def captions(audio_path, log=print):
 
 
 def build(source_path, start_s, end_s, out_dir, payoff_s=0.0, edit=DEFAULT_EDIT,
-          log=print):
+          kind="speech", log=print):
     """Plan -> cut -> (rotate) -> extract audio -> caption. Returns the manifest.
 
     Captions are always transcribed from the FINAL assembled audio, so a rotated
@@ -262,7 +275,7 @@ def build(source_path, start_s, end_s, out_dir, payoff_s=0.0, edit=DEFAULT_EDIT,
     os.makedirs(out_dir, exist_ok=True)
     want_loop = edit == "loop"
     s, e, payoff = plan_window(source_path, start_s, end_s, payoff_s=payoff_s,
-                               want_loop=want_loop, log=log)
+                               want_loop=want_loop, kind=kind, log=log)
 
     clip_path = os.path.join(out_dir, "clip.mp4")
     looped = False

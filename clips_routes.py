@@ -148,6 +148,7 @@ class MomentsBody(BaseModel):
     source_id: int
     limit: int = 0
     model: str = ""
+    mode: str = "auto"
 
 
 class CutBody(BaseModel):
@@ -166,6 +167,7 @@ class RunBody(BaseModel):
     model: str = ""
     mood: str = ""
     edit: str = ""
+    mode: str = "auto"
 
 
 @router.post("/ingest")
@@ -179,7 +181,7 @@ def post_ingest(body: IngestBody):
 def post_moments(body: MomentsBody):
     return _launch("moments", body.source_id, service.run_moments,
                    {"source_id": body.source_id, "limit": body.limit,
-                    "model": body.model or None})
+                    "model": body.model or None, "mode": body.mode or "auto"})
 
 
 @router.post("/cut")
@@ -202,7 +204,7 @@ def post_run(body: RunBody):
     return _launch("run", 0, service.run_all,
                    {"url": body.url.strip(), "limit": body.limit,
                     "model": body.model or None, "mood": body.mood or None,
-                    "edit": body.edit or None})
+                    "edit": body.edit or None, "mode": body.mode or "auto"})
 
 
 # --- direct actions ----------------------------------------------------------

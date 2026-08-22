@@ -92,8 +92,46 @@ def load_transcript(source_id):
         return json.load(f).get("segments") or []
 
 
-def run_moments(source_id, limit=0, model=None, from_file="", log=print):
-    """Transcript -> candidate windows. Replaces any candidates not yet cut.
+def find_action(source_id, video_path, segments, title, model=None, log=print):
+    """Motion + audio peaks -> vision-judged moments. Returns moment dicts.
+
+    Never fatal: a source with no readable video, or a vision call that fails,
+    costs the action half of the scan and leaves the speech half intact.
+    """
+    from clips import motion, vision, moments as mo
+
+    try:
+        log("scanning the picture for where something happens…")
+        sig = motion.combined(video_path, log=log)
+        wins = motion.windows(sig)
+        if not wins:
+            log("  nothing in the video spikes above its own baseline")
+            return []
+        log(f"  {len(wins)} candidate window(s) — judging them")
+        found = vision.judge(video_path, wins, segments=segments, title=title,
+                             model=model, log=log)
+    except Exception as e:  # noqa: BLE001 — the speech pass must still land
+        log(f"  action scan failed ({e}) — continuing with the transcript pass")
+        return []
+
+    out = []
+    for m in found:
+        m.pop("window", None)
+        m["kind"] = "action"
+        m.setdefault("quote", "")
+        out.append(m)
+    return out
+
+
+def run_moments(source_id, limit=0, model=None, from_file="", mode="auto",
+                log=print):
+    """Find candidate windows. Replaces any candidates not yet cut.
+
+    `mode` picks the detectors: "speech" reads the transcript, "action" reads the
+    picture, "auto" (default) runs both and merges. Auto is the default because
+    which one works is a property of the FOOTAGE, not something to ask about — a
+    dashcam has no quotable sentences and a podcast has no motion, and neither
+    knows which it is until something looks.
 
     Candidates already cut or rendered are left alone: re-scanning a source must
     not silently throw away work (or files) you have already reviewed.
@@ -104,6 +142,7 @@ def run_moments(source_id, limit=0, model=None, from_file="", log=print):
     with store.session() as s:
         src = get_source(s, source_id)
         duration, title, url = src.duration_s, src.title, src.url
+        video_path = src.local_path
 
     if from_file:
         with open(from_file, encoding="utf-8") as f:
@@ -114,8 +153,30 @@ def run_moments(source_id, limit=0, model=None, from_file="", log=print):
             log(f"  dropped {len(loaded) - len(found)} invalid/overlapping window(s)")
         log(f"  {len(found)} moment(s) loaded from {from_file}")
     else:
-        found = mo.find(segments, duration_s=duration, limit=limit,
-                        model=model, log=log)
+        found = []
+        if mode in ("speech", "auto") and segments:
+            spoken = mo.find(segments, duration_s=duration, limit=0,
+                             model=model, log=log)
+            for m in spoken:
+                m["kind"] = "speech"
+            found.extend(spoken)
+        if mode in ("action", "auto") and video_path and os.path.isfile(video_path):
+            acted = find_action(source_id, video_path, segments, title,
+                                model=model, log=log)
+            acted = [mo.clean_payoff(m) for m in acted
+                     if mo.valid(m, duration, min_seconds=mo.MIN_ACTION_SECONDS)]
+            found.extend(acted)
+        elif mode in ("action", "auto"):
+            log("  no local download — skipping the action pass")
+        # Both detectors can land on the same event from different evidence; the
+        # higher-scored reading wins.
+        found = mo.dedupe(found)
+        if limit:
+            found = sorted(found, key=lambda m: -float(m.get("score") or 0))[:limit]
+            found = sorted(found, key=lambda m: float(m["in"]))
+        n_action = sum(1 for m in found if m.get("kind") == "action")
+        log(f"  {len(found)} moment(s) kept ({len(found) - n_action} spoken, "
+            f"{n_action} action)")
 
     with store.session() as s:
         stale = (s.query(store.ClipCandidate)
@@ -135,6 +196,7 @@ def run_moments(source_id, limit=0, model=None, from_file="", log=print):
                 title=(m.get("title") or "")[:200], hook=(m.get("hook") or "")[:200],
                 quote=m.get("quote") or "", reason=m.get("why") or "",
                 score=float(m.get("score") or 0.0),
+                kind=m.get("kind") or "speech",
                 payoff_s=float(m.get("payoff") or 0.0))
             s.add(row)
             s.flush()
@@ -165,6 +227,7 @@ def run_cut(candidate_id, edit=None, log=print):
         src = get_source(s, cand.source_id)
         start, end = cand.start_s, cand.end_s
         payoff = cand.payoff_s or 0.0
+        kind = cand.kind or "speech"
         edit = edit or cand.edit or DEFAULT_EDIT
         source_path, uploader = src.local_path, src.uploader
         title = cand.title
@@ -172,9 +235,9 @@ def run_cut(candidate_id, edit=None, log=print):
         raise FileNotFoundError(
             f"source download missing ({source_path or 'unset'}) — re-run `ingest`")
 
-    log(f"cutting #{candidate_id} [{edit}]: {title or '(untitled)'}")
+    log(f"cutting #{candidate_id} [{kind}/{edit}]: {title or '(untitled)'}")
     man = ct.build(source_path, start, end, cand_dir(candidate_id),
-                   payoff_s=payoff, edit=edit, log=log)
+                   payoff_s=payoff, edit=edit, kind=kind, log=log)
 
     with store.session() as s:
         cand = get_candidate(s, candidate_id)
@@ -230,7 +293,7 @@ def run_render(candidate_id, mood=None, no_wait=False, service_url=None, log=pri
     return {"candidate_id": candidate_id, "output": out, "status": "rendered"}
 
 
-def run_all(url, limit=0, model=None, mood=None, edit=None, log=print):
+def run_all(url, limit=0, model=None, mood=None, edit=None, mode="auto", log=print):
     """ingest -> moments -> cut -> render, for a source you already trust.
 
     One failing candidate does not abandon the rest — a bad window should cost
@@ -238,7 +301,7 @@ def run_all(url, limit=0, model=None, mood=None, edit=None, log=print):
     """
     res = run_ingest(url, log=log)
     source_id = res["source_id"]
-    found = run_moments(source_id, limit=limit, model=model, log=log)
+    found = run_moments(source_id, limit=limit, model=model, mode=mode, log=log)
     done, failed = [], []
     for cid in found["candidate_ids"]:
         try:
@@ -279,6 +342,7 @@ def candidate_detail(candidate_id):
             "title": c.title, "hook": c.hook, "quote": c.quote,
             "reason": c.reason, "score": c.score, "mood": c.mood,
             "payoff_s": c.payoff_s or 0.0, "edit": c.edit or "linear",
+            "kind": c.kind or "speech",
             "clip_path": c.clip_path, "render_path": c.render_path,
             "caption_words": len(c.captions or []),
             "source": {"id": src.id, "title": src.title, "uploader": src.uploader,
@@ -344,4 +408,5 @@ def list_candidates(source_id=None, status=""):
                  "title": r.title, "hook": r.hook, "score": r.score,
                  "reason": r.reason, "quote": r.quote,
                  "payoff_s": r.payoff_s or 0.0, "edit": r.edit or "linear",
+                 "kind": r.kind or "speech",
                  "render_path": r.render_path} for r in rows]

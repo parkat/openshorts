@@ -69,9 +69,11 @@ def cmd_moments(args):
         print(mo.manual_prompt(service.load_transcript(args.source_id)))
         return
     res = service.run_moments(args.source_id, limit=args.limit,
-                              model=(args.model or None), from_file=args.from_file)
+                              model=(args.model or None), from_file=args.from_file,
+                              mode=args.mode)
     for c in service.list_candidates(source_id=res["source_id"]):
         loop = f" ⟲{_fmt_hms(c['payoff_s'])}" if c.get('payoff_s') else ""
+        loop += "" if c.get("kind", "speech") == "speech" else " [action]"
         print(f"  #{c['id']} [{c['score']:.2f}] {_fmt_hms(c['start_s'])}"
               f"-{_fmt_hms(c['end_s'])} ({c['seconds']}s){loop}  {c['title']}")
 
@@ -104,7 +106,8 @@ def cmd_run(args):
     from clips import service
     res = service.run_ingest(args.url)
     sid = res["source_id"]
-    got = service.run_moments(sid, limit=args.limit, model=(args.model or None))
+    got = service.run_moments(sid, limit=args.limit, model=(args.model or None),
+                              mode=args.mode)
     if not got["candidate_ids"]:
         print("no moments found — nothing to cut")
         return
@@ -196,6 +199,9 @@ def main():
     mp.add_argument("--from-file", default="",
                     help="load moments JSON instead of calling the LLM "
                          "(pairs with --prompt for a $0 Claude Code pass)")
+    mp.add_argument("--mode", default="auto", choices=["auto", "speech", "action"],
+                    help="auto (DEFAULT) runs both detectors; speech reads the "
+                         "transcript; action reads the picture (motion + vision)")
     mp.add_argument("--prompt", action="store_true",
                     help="print the task for a Claude Code session and exit")
     mp.set_defaults(func=cmd_moments)
@@ -224,6 +230,8 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="keep only the top N by score")
     ap.add_argument("--model", default="", help="override the OpenRouter model")
     ap.add_argument("--mood", default="", help="brand.py mood preset")
+    ap.add_argument("--mode", default="auto", choices=["auto", "speech", "action"],
+                    help="which detectors to run (default: both)")
     ap.add_argument("--edit", default="", choices=["", "linear", "loop"],
                     help="loop (DEFAULT) = payoff-first cold open that repeats "
                          "seamlessly; linear = straight through")
