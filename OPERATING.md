@@ -1,52 +1,64 @@
 # OPERATING.md — driving the deployment
 
-How to reach and operate the GPU box from any machine (desktop, laptop, a fresh
+How to reach and operate gpu-pc from any machine (desktop, laptop, a fresh
 Claude Code session). Written 2026-07-24.
 
 ---
 
 ## 1. Reaching the box
 
-The GPU box is **`192.168.68.72`** (`i9-32g-p100-2070`), user **`pt`**. It runs the
+The box is **`gpu-pc`** (`192.168.68.72`), user **`pt`**. It runs the
 whole stack in Docker. **It gets wiped periodically — treat it as disposable.**
-Nothing durable should live outside `./output`, `./archive` and Docker.
+
+> ⚠️ **Only `./archive` has actually proved durable.** The Aug 19 2026 reprovision
+> kept `archive/` (the SQLite store, media tokens, presets) and took **`output/`
+> with it** — every `explainer-<id>/` render, and the `media.parkat.us` tokens
+> pointing at them, were lost while the DB still listed the projects as reviewable.
+> `cache/` (the paid-asset content cache, `EXPLAINER_CACHE`) sits in the same
+> repo dir and survived that round, but it is exposed to the same risk. Treat a
+> finished render as gone unless it has been published or copied into `archive/`.
 
 Access is over **Tailscale**, via a subnet router on persistent Proxmox
 infrastructure (so the box itself needs nothing installed):
 
 ```
-laptop ─tailscale─→ CT100 "pve-home-agent" (100.108.154.84, advertises 192.168.68.0/22)
-                          └─→ GPU box 192.168.68.72
+laptop ─tailscale─→ lxc-100 "hub" (100.108.154.84, advertises 192.168.68.0/22)
+                          └─→ gpu-pc 192.168.68.72
 ```
 
 Suggested `~/.ssh/config` (key name will vary per machine):
 
 ```
-Host p100-guardian          # PRIMARY — direct, via the subnet route
+Host gpu-pc-direct          # PRIMARY — direct, via the subnet route
     HostName 192.168.68.72
     User pt
     IdentityFile ~/.ssh/openshorts_box
 
-Host pve-hub                # the Proxmox subnet router
+Host hub                    # lxc-100, the Proxmox subnet router
     HostName 100.108.154.84
     User root
     IdentityFile ~/.ssh/openshorts_box
 
-Host box-via-hub            # FALLBACK — survives a box wipe (see below)
+Host gpu-pc-via-hub         # FALLBACK — survives a box wipe (see below)
     HostName 192.168.68.72
     User pt
-    ProxyJump pve-hub
+    ProxyJump hub
     IdentityFile ~/.ssh/openshorts_box
 ```
 
-**After a box wipe** `~/.ssh/authorized_keys` on the box is gone with it. CT100
+Canonical names come from `homelab/NAMING.md`. On Parker's desktop the same box
+is reached as `gpu-pc` (hopping via `pve-r340`) — legacy aliases `p100-guardian`,
+`gpu-box` and `comfy-box` still resolve there during the migration.
+
+**After a box wipe** `~/.ssh/authorized_keys` on the box is gone with it. lxc-100
 holds its own credential (`/etc/hub/ssh/id_ed25519`, trusted as `hub-agent@home`)
-that the box's provisioning restores, so `box-via-hub` is the recovery path. Any
+that the box's provisioning restores, so `gpu-pc-via-hub` is the recovery path. Any
 new personal key must be added to the box's provisioning or it only survives until
 the next wipe.
 
-Proxmox host itself: `root@192.168.68.59` (`R340-vm`, PVE 9). Containers:
-100 `home-agent` (cloudflared + tailscale), 104 `nvr` (holds `/etc/nvr-creds/gpu-box.key`).
+Proxmox host itself: `pve-r340` — reach it at **`192.168.71.59`**, not `.68.59`
+(an HP printer squats that address). Containers: `lxc-100` (`hub` — cloudflared +
+tailscale), `lxc-104` (`nvr`, holds `/etc/nvr-creds/gpu-box.key`).
 
 ## 2. Deploying changes
 
@@ -54,7 +66,7 @@ The repo lives at `/home/pt/openshorts` on the box. Ship by checking files out o
 origin — **do not edit on the box**.
 
 ```bash
-ssh p100-guardian 'cd ~/openshorts && git fetch -q origin \
+ssh gpu-pc 'cd ~/openshorts && git fetch -q origin \
   && sudo chown -R pt:pt explainer \
   && git checkout origin/<branch> -- <paths...> \
   && git reset -q \
@@ -84,9 +96,18 @@ Two equivalent drivers over the same SQLite state (`archive/openshorts.db`):
 
 **CLI** (inside the backend container — it loads `.env`, so keys are present):
 ```bash
-ssh p100-guardian 'sudo docker exec openshorts-backend python -m explainer <cmd>'
+ssh gpu-pc 'sudo docker exec openshorts-backend python -m explainer <cmd>'
 # topics | script | clipfind | factcheck | assets | align | render | approve | schedule | cache | queue
 ```
+
+The **clips lane** (source-first: one long video -> many Shorts) has its own driver
+over the same store:
+```bash
+ssh gpu-pc 'sudo docker exec openshorts-backend python -m clips <cmd>'
+# ingest | moments | cut | render | run | sources | queue | show | approve | reject
+```
+Only `moments` spends (one LLM call per ~40k chars of transcript). `ingest` costs one
+download; `cut` and `render` are local and free. `run --url ...` chains the lot.
 
 **HTTP API / dashboard** — `openshorts.parkat.us` (Cloudflare Access), or curl
 `localhost:8000/api/explainer/*` on the box. Stage routes return `{job_id}`; poll

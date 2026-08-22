@@ -1,5 +1,6 @@
-# docker-compose.gpu.yml — NEW FILE. GPU override; apply ON TOP of docker-compose.yml.
-# Reserves the NVIDIA GPU for the backend only. Keep docker-compose.yml itself GPU-free.
+# docker-compose.gpu.yml — GPU override; apply ON TOP of docker-compose.yml.
+# Pinned to the RTX 2060 SUPER (GPU 1) by UUID so the live NVR keeps the Tesla P100 (GPU 0).
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
 services:
   backend:
     deploy:
@@ -7,9 +8,5 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              device_ids: ['GPU-d1f7fe23-5492-4268-6178-ae47b5b3971c']
               capabilities: [gpu]
-
-# Run GPU mode with (docker compose v2 syntax):
-#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
-# Base `docker compose up` stays GPU-less-safe (constraint 1). docker-compose.yml is UNCHANGED.

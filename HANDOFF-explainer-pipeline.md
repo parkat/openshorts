@@ -133,7 +133,7 @@ Both operate on the **same SQLite state**:
 ## 7. WEBSITE / DASHBOARD ENV — filled
 
 - **Public:** `openshorts.parkat.us` (+ new **`media.parkat.us`** for public tokenized clip hosting).
-- **Reverse proxy/TLS:** **Cloudflare Tunnel** (`cloudflared` on CT100), not nginx/Caddy.
+- **Reverse proxy/TLS:** **Cloudflare Tunnel** (`cloudflared` on lxc-100), not nginx/Caddy.
 - **Auth:** **Cloudflare Access** email allow-list in front of `openshorts.parkat.us`. Workers/CLI run server-side and bypass it. `media.parkat.us` is un-gated (tokenized).
 - **Deploy dashboard changes:** edit `dashboard/src/…` → `docker restart openshorts-frontend` (runs `vite build && vite preview`).
 
