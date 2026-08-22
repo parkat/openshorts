@@ -3,10 +3,13 @@
 Cuts locally from the ingested download, so this costs nothing and takes about a
 second per clip regardless of how many candidates a source produced.
 
-Windows come from a transcript, and transcript timings — auto-captions especially —
-routinely land mid-word. Every window is therefore re-listened to and snapped to
-real speech boundaries first, and the SNAPPED values are what get written back to
-the candidate: the row must describe what was actually cut, not what was asked for.
+Every boundary is aligned to SENTENCES, not just to words. Windows come from a
+transcript, and transcript timings — auto-captions especially — routinely land
+mid-word, but landing mid-*sentence* is the worse failure: a Short that opens on
+"unleashed AI-powered bots..." is a fragment, and a hard cut from one half-finished
+sentence to another reads as a mistake rather than an edit. The aligned values are
+what get written back to the candidate: the row must describe what was actually
+cut, not what was asked for.
 
 The clip keeps its full 16:9 frame. It is never cropped to 9:16 — the render lays
 it over a blurred, zoomed copy of itself, so nobody gets cut out of frame (a
@@ -15,10 +18,11 @@ largest, not whoever is talking).
 
 `edit="loop"` assembles the window as a **rotation** about the payoff point: the
 punchline plays first, then the run-up that led to it, ending on the exact frame
-the punchline began. Because the two halves are contiguous in the source, the
-wrap from the end back to the start is continuous speech — the loop is seamless
-by construction rather than by careful trimming, and a viewer who lets it repeat
-slides back into the punchline without a seam to notice.
+the punchline began. Because the two halves are contiguous in the source, the wrap
+from the end back to the start is continuous speech — seamless by construction.
+That leaves exactly one hard cut in the clip, where the punchline hands over to
+the run-up (source `end` -> source `start`), which is why both outer edges have to
+be whole sentences too: it is the one seam a viewer can actually hear.
 """
 import os
 import re
@@ -29,18 +33,116 @@ import subprocess
 # Both halves of a rotation need real material; a 3s stub reads as a glitch.
 MIN_PART = 3.0
 
+# How far a boundary may travel to reach a sentence. Sentence boundaries are far
+# sparser than word boundaries, so this is much larger than a word-level snap.
+MAX_SHIFT = 8.0
+
+# A word ending a sentence, allowing for a trailing quote/bracket.
+_SENTENCE_END = re.compile(r"[.!?…][\"'\)\]]*$")
+
 
 def _run(cmd):
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
 def snap(source_path, start_s, end_s, log=print):
-    """Move a window to clean speech boundaries. Returns (start, end) unchanged on
-    any failure, and never shifts a boundary more than ~2s."""
-    if os.environ.get("EXPLAINER_SNAP", "1") == "0":
-        return float(start_s), float(end_s)
+    """Word-level fallback: move a window to clean speech boundaries."""
     from explainer.assets.snap import snap_window
     return snap_window(source_path, float(start_s), float(end_s), log=log)
+
+
+def _listen(source_path, region_start, region_dur):
+    """[(abs_start, abs_end, text)] for a region, via the shared whisper config."""
+    from explainer.assets import snap as sn
+    with tempfile.TemporaryDirectory() as td:
+        wav = os.path.join(td, "region.wav")
+        if not sn._extract_wav(source_path, region_start, region_dur, wav):
+            return []
+        words = sn._words(wav)
+    return [(region_start + ws, region_start + we, txt) for ws, we, txt in words]
+
+
+def _sentence_edges(words):
+    """(starts, ends) — absolute times where sentences begin and end.
+
+    A word begins a sentence when the PREVIOUS word closed one; the region's own
+    first word is excluded, since it is mid-sentence by construction.
+    """
+    starts = [words[i][0] for i in range(1, len(words))
+              if _SENTENCE_END.search(words[i - 1][2])]
+    ends = [w[1] for w in words if _SENTENCE_END.search(w[2])]
+    return starts, ends
+
+
+def _pick(candidates, want, prefer_earlier, max_shift):
+    """Nearest candidate to `want`, trying the preferred side first.
+
+    `prefer_earlier` picks the last candidate at-or-before `want` (used for a clip
+    START and the loop split, where going back keeps the sentence's own opening);
+    otherwise the first at-or-after (used for a clip END, where going forward
+    completes the sentence instead of truncating it).
+    """
+    tol = 0.25
+    before = [c for c in candidates if c <= want + tol]
+    after = [c for c in candidates if c >= want - tol]
+    first, second = (before[::-1], after) if prefer_earlier else (after, before[::-1])
+    for group in (first, second):
+        if group and abs(group[0] - want) <= max_shift:
+            return group[0]
+    return None
+
+
+def plan_window(source_path, start_s, end_s, payoff_s=0.0, want_loop=False,
+                max_shift=MAX_SHIFT, log=print):
+    """Align a window (and optionally its loop split) to sentence boundaries.
+
+    One whisper pass over the padded window serves all three boundaries — the
+    edges and the split are all just queries against the same word list, and
+    re-listening per boundary would triple the slowest part of the cut.
+
+    Returns (start, end, payoff|None). Falls back to word-level snapping if the
+    audio cannot be read, and returns payoff=None whenever the split cannot be put
+    on a sentence.
+    """
+    start_s, end_s = float(start_s), float(end_s)
+    if os.environ.get("EXPLAINER_SNAP", "1") == "0":
+        return start_s, end_s, (float(payoff_s) if want_loop and payoff_s else None)
+
+    pad = max_shift + 3.0
+    region_start = max(0.0, start_s - pad)
+    words = _listen(source_path, region_start, (end_s + pad) - region_start)
+    if len(words) < 2:
+        log("  could not re-listen to the window — falling back to word snapping")
+        s, e = snap(source_path, start_s, end_s, log=log)
+        return s, e, None
+
+    starts, ends = _sentence_edges(words)
+    if not starts or not ends:
+        log("  no sentence punctuation in this window — falling back to word snapping")
+        s, e = snap(source_path, start_s, end_s, log=log)
+        return s, e, None
+
+    new_start = _pick(starts, start_s, True, max_shift)
+    new_end = _pick(ends, end_s, False, max_shift)
+    if new_start is None or new_end is None or new_end - new_start < MIN_PART * 2:
+        log("  no usable sentence edges — falling back to word snapping")
+        s, e = snap(source_path, start_s, end_s, log=log)
+        return s, e, None
+
+    if abs(new_start - start_s) > 0.01 or abs(new_end - end_s) > 0.01:
+        log(f"  sentences: {start_s:.2f}-{end_s:.2f} -> {new_start:.2f}-{new_end:.2f}")
+
+    payoff = None
+    if want_loop and payoff_s:
+        inner = [x for x in starts if new_start + MIN_PART <= x <= new_end - MIN_PART]
+        payoff = _pick(inner, float(payoff_s), True, max_shift) if inner else None
+        if payoff is None:
+            log(f"  no sentence start near the payoff ({float(payoff_s):.2f}) with "
+                f"{MIN_PART:.0f}s on both sides — cutting linear")
+        elif abs(payoff - float(payoff_s)) > 0.01:
+            log(f"  payoff {float(payoff_s):.2f} was mid-sentence -> {payoff:.2f}")
+
+    return new_start, new_end, payoff
 
 
 def cut_window(source_path, start_s, end_s, out_path):
@@ -54,62 +156,6 @@ def cut_window(source_path, start_s, end_s, out_path):
     if r.returncode != 0 or not os.path.isfile(out_path):
         raise RuntimeError(f"ffmpeg cut failed: {r.stderr.decode(errors='replace')[-300:]}")
     return out_path
-
-
-# A word ending a sentence, allowing for a trailing quote/bracket.
-_SENTENCE_END = re.compile(r"[.!?…][\"'\)\]]*$")
-
-
-def snap_point(source_path, t, max_shift=8.0, log=print):
-    """Move the loop split to the start of a SENTENCE, or refuse.
-
-    A word boundary is not good enough here. The split becomes the first frame of
-    the Short, so landing inside a sentence opens the video on a fragment
-    ("unleashed AI-powered bots...") — grammatically broken and a weak hook.
-
-    Preference is the start of the sentence CONTAINING `t`, not the nearest
-    boundary in either direction: the model points at where the punchline lands,
-    so the sentence it points into is the punchline, and opening at that
-    sentence's start keeps its subject. Only if that is out of reach do we take
-    the next sentence forward.
-
-    Returns None when no sentence start is within `max_shift` — the caller then
-    cuts linear, because an awkward open is worse than no loop.
-    """
-    try:
-        from explainer.assets import snap as sn
-        pad = max_shift + 3.0
-        region_start = max(0.0, float(t) - pad)
-        with tempfile.TemporaryDirectory() as td:
-            wav = os.path.join(td, "region.wav")
-            if not sn._extract_wav(source_path, region_start, pad * 2, wav):
-                return None
-            words = sn._words(wav)
-        if len(words) < 2:
-            return None
-
-        # A word starts a sentence when the PREVIOUS word closed one. The region's
-        # own first word is excluded — it is mid-sentence by construction.
-        starts = [region_start + words[i][0] for i in range(1, len(words))
-                  if _SENTENCE_END.search(words[i - 1][2])]
-        if not starts:
-            return None
-
-        t = float(t)
-        before = [x for x in starts if x <= t + 0.25]
-        after = [x for x in starts if x > t + 0.25]
-        pick = None
-        if before and (t - before[-1]) <= max_shift:
-            pick = before[-1]          # start of the sentence t falls inside
-        elif after and (after[0] - t) <= max_shift:
-            pick = after[0]            # else the next sentence along
-        if pick is None:
-            return None
-        if pick != t:
-            log(f"  payoff {t:.2f} was mid-sentence -> sentence start {pick:.2f}")
-        return pick
-    except Exception:  # noqa: BLE001 — snapping must never break the cut
-        return None
 
 
 def rotate(clip_path, split_s, out_path):
@@ -182,44 +228,28 @@ def captions(audio_path, log=print):
 
 def build(source_path, start_s, end_s, out_dir, payoff_s=0.0, edit="linear",
           log=print):
-    """Snap -> cut -> (rotate) -> extract audio -> caption. Returns the manifest.
+    """Plan -> cut -> (rotate) -> extract audio -> caption. Returns the manifest.
 
     Captions are always transcribed from the FINAL assembled audio, so a rotated
     clip's captions follow the rotated order automatically — there is no separate
     timeline to keep in step.
     """
     os.makedirs(out_dir, exist_ok=True)
-    s, e = snap(source_path, start_s, end_s, log=log)
-    if (s, e) != (float(start_s), float(end_s)):
-        log(f"  snapped {float(start_s):.2f}-{float(end_s):.2f} -> {s:.2f}-{e:.2f}")
+    want_loop = edit == "loop"
+    s, e, payoff = plan_window(source_path, start_s, end_s, payoff_s=payoff_s,
+                               want_loop=want_loop, log=log)
 
     clip_path = os.path.join(out_dir, "clip.mp4")
-    payoff = float(payoff_s or 0.0)
     looped = False
-    if edit == "loop" and s < payoff < e:
-        snapped = snap_point(source_path, payoff, log=log)
-        if snapped is None:
-            log(f"  no sentence boundary near the payoff ({payoff:.2f}) — cutting linear "
-                "rather than opening on a fragment")
-            payoff = 0.0
-        elif not (s + MIN_PART <= snapped <= e - MIN_PART):
-            log(f"  sentence start {snapped:.2f} leaves under {MIN_PART:.0f}s on one "
-                "side — cutting linear")
-            payoff = 0.0
-        else:
-            payoff = snapped
-            linear = cut_window(source_path, s, e, os.path.join(out_dir, "linear.mp4"))
-            split = payoff - s
-            rotate(linear, split, clip_path)
-            os.remove(linear)
-            looped = True
-            log(f"  loop: opens on payoff at {payoff:.2f} "
-                f"({e - payoff:.1f}s punchline + {split:.1f}s run-up)")
-    elif edit == "loop":
-        log(f"  no usable payoff point for #loop ({payoff:.2f} outside "
-            f"{s:.2f}-{e:.2f}) — cutting linear")
-
-    if not looped:
+    if want_loop and payoff is not None:
+        linear = cut_window(source_path, s, e, os.path.join(out_dir, "linear.mp4"))
+        split = payoff - s
+        rotate(linear, split, clip_path)
+        os.remove(linear)
+        looped = True
+        log(f"  loop: opens on the payoff at {payoff:.2f} "
+            f"({e - payoff:.1f}s punchline + {split:.1f}s run-up)")
+    else:
         cut_window(source_path, s, e, clip_path)
 
     audio = extract_audio(clip_path, os.path.join(out_dir, "audio.wav"))
