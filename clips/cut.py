@@ -71,7 +71,12 @@ def snap_point(source_path, t, max_shift=1.5, log=print):
         rel = sn._best_start(words, float(t) - region_start)
         if rel is None:
             return float(t)
-        snapped = region_start + rel - sn.EDGE_PAD
+        # No EDGE_PAD here. At an outer edge that pad keeps a sliver of silence
+        # around the speech we kept; at an internal split the SAME instant is both
+        # the run-up's end and the punchline's start, so padding it backwards
+        # leaves the word's onset at the head of the punchline while its full
+        # self ends the run-up — an audible stutter across the loop seam.
+        snapped = region_start + rel
         if abs(snapped - float(t)) > max_shift:
             return float(t)
         return snapped
