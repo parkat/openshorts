@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Upload, FileVideo, Sparkles, Youtube, Instagram, Share2, LogOut, ChevronDown, Check, Activity, LayoutDashboard, Settings, PlusCircle, History, Menu, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, FlaskConical } from 'lucide-react';
+import { Upload, FileVideo, Sparkles, Youtube, Instagram, Share2, LogOut, ChevronDown, Check, Activity, LayoutDashboard, Settings, PlusCircle, History, Menu, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, FlaskConical, Scissors } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import ResultCard from './components/ResultCard';
 import ProcessingAnimation from './components/ProcessingAnimation';
 // import Gallery from './components/Gallery';
 import ThumbnailStudio from './components/ThumbnailStudio';
-import SaaShortsTab from './components/SaaShortsTab';
+import ClipsTab from './components/clips/ClipsTab';
 import UGCGallery from './components/UGCGallery';
 import ExplainerTab from './components/explainer/ExplainerTab';
 import ScheduleWeekModal from './components/ScheduleWeekModal';
@@ -526,11 +526,11 @@ function App() {
         </button>
 
         <button
-          onClick={() => setActiveTab('saasshorts')}
-          className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors ${activeTab === 'saasshorts' ? 'bg-violet-500/10 text-violet-400' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
+          onClick={() => setActiveTab('clips')}
+          className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors ${activeTab === 'clips' ? 'bg-violet-500/10 text-violet-400' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
         >
-          <Sparkles size={20} />
-          <span className="font-medium hidden lg:block">AI Shorts</span>
+          <Scissors size={20} />
+          <span className="font-medium hidden lg:block">Clips</span>
         </button>
 
         <button
@@ -878,9 +878,11 @@ function App() {
             </div>
           )}
 
-          {/* View: SaaS Shorts */}
-          {activeTab === 'saasshorts' && (
-            <SaaShortsTab geminiApiKey={apiKey} elevenLabsKey={elevenLabsKey} falKey={falKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} />
+          {/* View: Clips lane — one long video -> many standalone Shorts. Replaced
+              the AI Shorts (UGC) tab, which is no longer used. SaaShortsTab.jsx and
+              its /api/saasshorts routes are still in the tree, just unmounted. */}
+          {activeTab === 'clips' && (
+            <ClipsTab />
           )}
 
           {/* View: Explainer lane */}

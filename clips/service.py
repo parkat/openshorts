@@ -219,6 +219,28 @@ def run_render(candidate_id, mood=None, no_wait=False, service_url=None, log=pri
     return {"candidate_id": candidate_id, "output": out, "status": "rendered"}
 
 
+def run_all(url, limit=0, model=None, mood=None, log=print):
+    """ingest -> moments -> cut -> render, for a source you already trust.
+
+    One failing candidate does not abandon the rest — a bad window should cost
+    that clip, not the batch.
+    """
+    res = run_ingest(url, log=log)
+    source_id = res["source_id"]
+    found = run_moments(source_id, limit=limit, model=model, log=log)
+    done, failed = [], []
+    for cid in found["candidate_ids"]:
+        try:
+            run_cut(cid, log=log)
+            run_render(cid, mood=mood, log=log)
+            done.append(cid)
+        except Exception as e:  # noqa: BLE001 — one bad window must not kill the batch
+            log(f"  ✗ #{cid}: {e}")
+            failed.append(cid)
+    log(f"done: {len(done)} rendered, {len(failed)} failed")
+    return {"source_id": source_id, "rendered": done, "failed": failed}
+
+
 # --- review -----------------------------------------------------------------
 
 def set_status(candidate_id, status, log=print):
@@ -230,6 +252,55 @@ def set_status(candidate_id, status, log=print):
         s.commit()
     log(f"candidate #{candidate_id} -> {status}")
     return {"candidate_id": candidate_id, "status": status}
+
+
+def candidate_detail(candidate_id):
+    """Everything the studio view needs for one candidate, or None."""
+    with store.session() as s:
+        c = s.get(store.ClipCandidate, candidate_id)
+        if not c:
+            return None
+        src = s.get(store.ClipSource, c.source_id)
+        return {
+            "id": c.id, "source_id": c.source_id, "status": c.status,
+            "start_s": c.start_s, "end_s": c.end_s,
+            "seconds": round(c.end_s - c.start_s, 1),
+            "title": c.title, "hook": c.hook, "quote": c.quote,
+            "reason": c.reason, "score": c.score, "mood": c.mood,
+            "clip_path": c.clip_path, "render_path": c.render_path,
+            "caption_words": len(c.captions or []),
+            "source": {"id": src.id, "title": src.title, "uploader": src.uploader,
+                       "url": src.url} if src else None,
+        }
+
+
+def delete_source(source_id, log=print):
+    """Drop a source and every candidate under it (rows only).
+
+    Rendered files under output/ are left alone deliberately — this is a queue
+    cleanup, not a file purge, and an already-published render must not vanish
+    because someone tidied the list.
+    """
+    with store.session() as s:
+        src = get_source(s, source_id)
+        rows = (s.query(store.ClipCandidate)
+                .filter(store.ClipCandidate.source_id == source_id).all())
+        n = len(rows)
+        for r in rows:
+            s.delete(r)
+        s.delete(src)
+        s.commit()
+    log(f"deleted source #{source_id} and {n} candidate(s)")
+    return {"source_id": source_id, "deleted_candidates": n}
+
+
+def delete_candidate(candidate_id, log=print):
+    """Drop one candidate row (its files stay on disk)."""
+    with store.session() as s:
+        s.delete(get_candidate(s, candidate_id))
+        s.commit()
+    log(f"deleted candidate #{candidate_id}")
+    return {"candidate_id": candidate_id}
 
 
 def list_sources():

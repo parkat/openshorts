@@ -245,6 +245,13 @@ try:
 except Exception as _exc:  # pragma: no cover — never let it break the whole server
     print(f"⚠️ explainer routes not mounted: {_exc}")
 
+# Clips lane — source-first clipping of long-form video. Same store, own routes.
+try:
+    from clips_routes import router as clips_router
+    app.include_router(clips_router)
+except Exception as _exc:  # pragma: no cover — never let it break the whole server
+    print(f"⚠️ clips routes not mounted: {_exc}")
+
 # ---------------------------------------------------------------------------
 # Edit presets (backend-synced, so they're available on every device) + batch
 # download. Presets live in the project dir (bind-mounted), NOT in OUTPUT_DIR
