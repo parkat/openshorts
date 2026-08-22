@@ -27,6 +27,15 @@ FORMAT = ("bv*[height<=1080][vcodec^=avc1]+ba[acodec^=mp4a]/"
           "bv*[height<=1080][vcodec^=avc1]+ba/"
           "b[ext=mp4]/bv*[height<=1080]+ba/b")
 
+# YouTube player clients to try, in order. Which ones work changes without
+# warning: on 2026-08-22 the default and `tv` clients returned 403 / "the page
+# needs to be reloaded" for a video whose metadata read fine, while `android`
+# downloaded it — and yt-dlp could not fall back to impersonation because
+# curl_cffi is not installed in the image. Trying a list beats pinning one.
+CLIENTS = [c.strip() for c in
+           os.environ.get("CLIPS_YT_CLIENTS", "android,default,tv,web_safari").split(",")
+           if c.strip()]
+
 
 def youtube_dir():
     d = os.path.join(CACHE_DIR, "youtube")
@@ -55,19 +64,26 @@ def download(url, video_id, log=print):
         log(f"  cached download: {out} ({os.path.getsize(out) / 1e6:.0f} MB)")
         return out
     log(f"  downloading {url} -> {out}")
-    cmd = [
-        "yt-dlp", "--no-playlist", "-f", FORMAT, "--merge-output-format", "mp4",
-        # Captions in the same pass — `transcript.ensure_vtt` already knows to look
-        # for them here, so the moments stage costs no extra fetch.
-        "--write-auto-subs", "--sub-langs", "en.*", "--convert-subs", "vtt",
-        "-o", os.path.join(youtube_dir(), f"{video_id}.%(ext)s"),
-        url,
-    ]
-    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if not os.path.isfile(out):
-        raise RuntimeError(f"yt-dlp failed for {url}: {r.stderr.decode(errors='replace')[-400:]}")
-    log(f"  downloaded {os.path.getsize(out) / 1e6:.0f} MB")
-    return out
+    last = ""
+    for client in CLIENTS:
+        cmd = [
+            "yt-dlp", "--no-playlist", "-f", FORMAT, "--merge-output-format", "mp4",
+            # Captions in the same pass — `transcript.ensure_vtt` already knows to
+            # look for them here, so the moments stage costs no extra fetch.
+            "--write-auto-subs", "--sub-langs", "en.*", "--convert-subs", "vtt",
+            "-o", os.path.join(youtube_dir(), f"{video_id}.%(ext)s"),
+        ]
+        if client != "default":
+            cmd += ["--extractor-args", f"youtube:player_client={client}"]
+        cmd.append(url)
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if os.path.isfile(out) and os.path.getsize(out) > 0:
+            log(f"  downloaded {os.path.getsize(out) / 1e6:.0f} MB (client={client})")
+            return out
+        last = r.stderr.decode(errors="replace").strip().splitlines()[-1:] or [""]
+        log(f"  client={client} failed: {last[0][:120]}")
+    raise RuntimeError(f"yt-dlp failed for {url} on every client "
+                       f"({', '.join(CLIENTS)}): {last[0] if last else ''}")
 
 
 def transcript_segments(url, video_id, video_path, log=print):
