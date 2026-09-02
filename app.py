@@ -126,6 +126,26 @@ def archive_job_clips(job_id, job_path):
     return saved
 
 
+# Directories under OUTPUT_DIR that the 24h purge must never touch.
+#
+# The purge was written for the original lane, whose jobs live in memory and are
+# genuinely disposable after a day. The explainer and clips lanes are not: their
+# state is durable in SQLite, a render sits in a review queue until a human looks
+# at it, and once queued into Buffer the file must survive until its slot — which
+# is days out. Purging those left rows saying "rendered" pointing at files that
+# had been deleted, and a scheduled post whose media URL 404s at publish time.
+#
+# Retention for those lanes is a lane decision (delete a source, reject a clip),
+# not a clock.
+DURABLE_PREFIXES = ("explainer-", "clips-")
+KEEP_DIRS = {"stock", "thumbnails", "archive"}
+
+
+def _is_purgeable(name: str) -> bool:
+    """True only for original-lane job dirs — see DURABLE_PREFIXES."""
+    return name not in KEEP_DIRS and not name.startswith(DURABLE_PREFIXES)
+
+
 async def cleanup_jobs():
     """Background task to remove old jobs and files."""
     import time
@@ -139,7 +159,7 @@ async def cleanup_jobs():
             # Check OUTPUT_DIR
             for job_id in os.listdir(OUTPUT_DIR):
                 job_path = os.path.join(OUTPUT_DIR, job_id)
-                if os.path.isdir(job_path):
+                if os.path.isdir(job_path) and _is_purgeable(job_id):
                     if now - os.path.getmtime(job_path) > JOB_RETENTION_SECONDS:
                         # Archive clips to the persistent host folder BEFORE purging.
                         try:

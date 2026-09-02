@@ -377,6 +377,7 @@ def candidate_detail(candidate_id):
             "payoff_s": c.payoff_s or 0.0, "edit": c.edit or "linear",
             "kind": c.kind or "speech",
             "clip_path": c.clip_path, "render_path": c.render_path,
+            "has_render": bool(c.render_path and os.path.isfile(c.render_path)),
             "caption_words": len(c.captions or []),
             "source": {"id": src.id, "title": src.title, "uploader": src.uploader,
                        "url": src.url} if src else None,
@@ -442,4 +443,8 @@ def list_candidates(source_id=None, status=""):
                  "reason": r.reason, "quote": r.quote,
                  "payoff_s": r.payoff_s or 0.0, "edit": r.edit or "linear",
                  "kind": r.kind or "speech", "caption": r.caption or "",
+                 # The row and the file can disagree — a render can be removed
+                 # from under a "rendered" status. Report it rather than handing
+                 # the dashboard a video URL that 404s.
+                 "has_render": bool(r.render_path and os.path.isfile(r.render_path)),
                  "render_path": r.render_path} for r in rows]

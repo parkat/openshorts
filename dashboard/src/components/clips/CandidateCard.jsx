@@ -12,7 +12,10 @@ export default function CandidateCard({ candidate: c, mood, edit, busy, onRun, o
   const [open, setOpen] = useState(false);
   const [queueing, setQueueing] = useState(false);
   const [queueError, setQueueError] = useState(null);
-  const rendered = ['rendered', 'approved', 'rejected', 'scheduled'].includes(c.status);
+  const claimsRender = ['rendered', 'approved', 'rejected', 'scheduled'].includes(c.status);
+  // `has_render` is the filesystem's answer, not the row's. They can disagree.
+  const missing = claimsRender && c.has_render === false;
+  const rendered = claimsRender && !missing;
   const isCut = c.status === 'cut' || rendered;
 
   const act = async (fn) => { await fn(); onChanged?.(); };
@@ -72,6 +75,12 @@ export default function CandidateCard({ candidate: c, mood, edit, busy, onRun, o
           </span>
         </div>
       </div>
+
+      {missing && (
+        <p className="text-[11px] text-amber-300/90 mt-2 leading-relaxed">
+          The render file is gone. Re-render to get it back — the cut is still on disk.
+        </p>
+      )}
 
       {rendered && c.video_url && (
         <video
