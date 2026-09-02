@@ -13,7 +13,7 @@ publishing action that quietly went to a log would be exactly the wrong shape.
 import os
 import sys
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -68,9 +68,42 @@ def reset_settings():
 
 
 @router.get("/connection")
-def get_connection():
-    """Probe the Buffer token and list what it can post to."""
-    return publishing.connection()
+def get_connection(api_key: str = Header(None, alias="X-Buffer-Key")):
+    """Probe a Buffer token and list what it can post to.
+
+    An `X-Buffer-Key` header tests THAT key without storing it, which is what the
+    dashboard's Test button uses — you find out whether a token works before it
+    replaces one that might still be good.
+    """
+    out = publishing.connection(key=(api_key or None))
+    out["token"] = publishing.token_status()
+    return out
+
+
+class TokenBody(BaseModel):
+    token: str
+
+
+@router.post("/token")
+def set_token(body: TokenBody):
+    """Store a Buffer token server-side, after checking that it actually works.
+
+    Server-side is the only place it can live usefully: the drip runs in a
+    background worker, so a token held in browser storage could never publish
+    anything on a schedule.
+    """
+    try:
+        conn = publishing.save_token(body.token)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "connection": conn, "token": publishing.token_status()}
+
+
+@router.delete("/token")
+def delete_token():
+    """Drop the stored token and fall back to the server's .env."""
+    return {"ok": True, "token": publishing.clear_token(),
+            "connection": publishing.connection()}
 
 
 @router.get("/queue")

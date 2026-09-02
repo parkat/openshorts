@@ -159,10 +159,80 @@ def reset_settings():
     return get_settings()
 
 
-# --- Buffer connection ------------------------------------------------------
+# --- the Buffer token -------------------------------------------------------
+#
+# The token has to live server-side. Publishing is scheduled work done by a
+# background worker hours or days after you clicked anything, so a key held only
+# in a browser tab — which is where the original lane's Settings field puts it —
+# can never drive it.
+#
+# It is stored under its own settings key, NOT inside the publishing settings
+# blob, because that blob is returned wholesale to the dashboard. Keeping the
+# secret out of it means no response can leak the token by accident.
+
+TOKEN_KEY = "buffer_token"
+
+
+def stored_token():
+    """The dashboard-supplied token, or '' if none has been saved."""
+    with store.session() as s:
+        row = s.query(store.Setting).filter(store.Setting.key == TOKEN_KEY).first()
+        return ((row.value or {}).get("token") or "") if row else ""
+
 
 def buffer_key():
-    return os.environ.get("BUFFER") or ""
+    """The token to use: the dashboard override first, then the server .env.
+
+    The override wins so a stale `.env` can be fixed from the UI without an ssh —
+    which is exactly the situation this ordering exists for.
+    """
+    return stored_token() or os.environ.get("BUFFER") or ""
+
+
+def token_status():
+    """Where the token comes from and its last four characters. Never the token."""
+    stored = stored_token()
+    env = os.environ.get("BUFFER") or ""
+    key = stored or env
+    return {"has_token": bool(key),
+            "source": "settings" if stored else ("env" if env else "none"),
+            "hint": f"…{key[-4:]}" if len(key) >= 4 else ""}
+
+
+def save_token(token):
+    """Validate a token against Buffer, then store it. Raises ValueError if it fails.
+
+    Checked before saving, deliberately: storing a token that does not work would
+    replace one silent failure with another, and the point of this whole path is
+    that a dead token stops being invisible.
+    """
+    token = (token or "").strip()
+    if not token:
+        raise ValueError("no token given")
+    probe = connection(key=token)
+    if not probe["ok"]:
+        raise ValueError(probe["error"])
+    with store.session() as s:
+        row = s.query(store.Setting).filter(store.Setting.key == TOKEN_KEY).first()
+        if row is None:
+            row = store.Setting(key=TOKEN_KEY, value={})
+            s.add(row)
+        row.value = {"token": token}
+        s.commit()
+    return probe
+
+
+def clear_token():
+    """Drop the override and fall back to the server .env."""
+    with store.session() as s:
+        row = s.query(store.Setting).filter(store.Setting.key == TOKEN_KEY).first()
+        if row:
+            s.delete(row)
+            s.commit()
+    return token_status()
+
+
+# --- Buffer connection ------------------------------------------------------
 
 
 def connection(key=None):
@@ -289,8 +359,15 @@ def _post_to_buffer(job_id, filename, title, channels, due_iso, backend_url=None
             "title": title, "channels": channels,
             "schedule_iso": due_iso, "scheduling": (get_settings()
                                                     .get("scheduling", "automatic"))}
+    # Send the resolved key explicitly. The backend would otherwise fall back to
+    # its own env, so a dashboard-supplied token could report "connected" on the
+    # status panel and then post with the stale one.
+    headers = {}
+    key = buffer_key()
+    if key:
+        headers["X-Buffer-Key"] = key
     r = requests.post(f"{(backend_url or BACKEND_URL).rstrip('/')}/api/buffer/post",
-                      json=body, timeout=120)
+                      json=body, headers=headers, timeout=120)
     r.raise_for_status()
     return r.json()
 
@@ -444,7 +521,7 @@ def status():
     conn = connection()
     q = list_queue(limit_posts=10)
     queued = [r for r in q["scheduled"] if r["status"] == "queued"]
-    out = {"settings": st, "connection": conn,
+    out = {"settings": st, "connection": conn, "token": token_status(),
            "queued": len(queued),
            "failed": len([r for r in q["scheduled"] if r["status"] == "failed"]),
            "next_due": queued[0]["due_at"] if queued else None,

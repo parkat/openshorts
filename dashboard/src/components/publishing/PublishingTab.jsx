@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Send, RotateCcw, AlertTriangle, CheckCircle2, Pause, Play, X, Trash2, Plus,
-  Calendar, Clock, Loader2, Radio,
+  Calendar, Clock, Loader2, Radio, KeyRound,
 } from 'lucide-react';
 import {
   publishingApi, PLATFORM_LABEL, LANE_LABEL, LANE_TINT, STATUS_TINT,
@@ -22,6 +22,8 @@ export default function PublishingTab() {
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
+  const [token, setToken] = useState('');
+  const [probe, setProbe] = useState(null);   // result of testing a pasted token
 
   const load = useCallback(async () => {
     setBusy('load');
@@ -147,22 +149,81 @@ export default function PublishingTab() {
                       {conn.error}
                     </p>
                     <p className="text-[11px] text-zinc-500 mt-2 leading-relaxed">
-                      Nothing can be queued until this is fixed. The key is
-                      server-side: set <span className="font-mono">BUFFER</span> in
-                      the box&apos;s <span className="font-mono">.env</span> from a
-                      personal token at publish.buffer.com/settings/api, then restart
-                      the backend.
+                      Nothing can be queued until this is fixed. Paste a working
+                      token below — it is checked before it is stored, and takes
+                      effect immediately with no restart.
                     </p>
                   </>
                 )}
               </div>
-              <button
-                onClick={() => run('conn', () => publishingApi.connection())}
-                disabled={busy === 'conn'}
-                className="text-xs text-zinc-400 hover:text-white shrink-0 transition-colors"
-              >
-                {busy === 'conn' ? 'Testing…' : 'Test'}
-              </button>
+            </div>
+
+            {/* Token. It has to live server-side: the drip runs in a background
+                worker, so a key in browser storage could never publish on a
+                schedule. The field below stores it on the box, not in this tab. */}
+            <div className="mt-4 pt-4 border-t border-white/5">
+              <label className="flex items-center gap-1.5 text-xs text-zinc-500 mb-2">
+                <KeyRound size={12} /> Buffer API token
+                {data.token?.has_token && (
+                  <span className="text-zinc-600">
+                    — currently using {data.token.hint} from{' '}
+                    {data.token.source === 'settings' ? 'this field' : "the server's .env"}
+                  </span>
+                )}
+              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="password"
+                  value={token}
+                  onChange={(e) => { setToken(e.target.value.trim()); setProbe(null); }}
+                  placeholder="paste a personal token from publish.buffer.com/settings/api"
+                  className="input-field py-2 text-sm flex-1 min-w-[240px]"
+                />
+                <button
+                  onClick={() => run('probe', async () => {
+                    const r = await publishingApi.connection(token || undefined);
+                    setProbe(r);
+                    if (!r.ok) throw new Error(r.error);
+                  })}
+                  disabled={busy === 'probe'}
+                  className="text-xs px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-200 disabled:opacity-40 transition-colors"
+                >
+                  {busy === 'probe' ? 'Testing…' : 'Test'}
+                </button>
+                <button
+                  onClick={() => run('token', async () => {
+                    await publishingApi.saveToken(token);
+                    setToken('');
+                    setProbe(null);
+                  }, 'Token saved on the server — the scheduler can use it now.')}
+                  disabled={!token || busy === 'token'}
+                  className="btn-primary text-xs px-3 py-2 disabled:opacity-40"
+                >
+                  {busy === 'token' ? 'Saving…' : 'Save'}
+                </button>
+                {data.token?.source === 'settings' && (
+                  <button
+                    onClick={() => run('cleartoken', () => publishingApi.clearToken(),
+                      "Cleared — falling back to the server's .env.")}
+                    className="text-xs text-zinc-500 hover:text-red-300 transition-colors"
+                    title="drop the stored token and fall back to the server .env"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              {probe?.ok && (
+                <p className="text-[11px] text-emerald-300 mt-2">
+                  That token works — {probe.channels.length} channel
+                  {probe.channels.length === 1 ? '' : 's'}:{' '}
+                  {probe.channels.map((c) => c.name).join(', ')}. Save it to use it.
+                </p>
+              )}
+              <p className="text-[11px] text-zinc-600 mt-2 leading-relaxed">
+                Stored on the box, not in this browser. The Settings tab&apos;s Buffer
+                key only reaches the original lane&apos;s Post button — it is held in
+                browser storage, which the background scheduler cannot read.
+              </p>
             </div>
           </div>
 

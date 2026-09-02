@@ -456,11 +456,21 @@ class BufferPostBody(BaseModel):
     scheduling: str = "automatic"        # 'automatic' | 'notification'
 
 def _buffer_key(header_key):
-    """Prefer the browser-supplied key; fall back to the server-side BUFFER env
-    (lets the headless scheduler post, and the UI work without re-entering it)."""
-    key = header_key or os.environ.get("BUFFER")
+    """Resolve the Buffer token: browser header, then stored, then the .env.
+
+    The stored token (Publishing tab) sits in the middle deliberately. It is the
+    only one the headless worker can use, so it has to outrank the .env — but an
+    explicit header still wins, which is what lets the Publishing tab test a
+    pasted token before committing to it."""
+    key = header_key
     if not key:
-        raise HTTPException(status_code=400, detail="No Buffer API key (set it in Settings, or BUFFER in the server .env).")
+        try:
+            import publishing
+            key = publishing.buffer_key()
+        except Exception:  # noqa: BLE001 — fall back rather than break posting
+            key = os.environ.get("BUFFER")
+    if not key:
+        raise HTTPException(status_code=400, detail="No Buffer API key (set it in the Publishing tab, or BUFFER in the server .env).")
     return key
 
 @app.get("/api/buffer/channels")

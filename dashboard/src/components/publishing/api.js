@@ -20,7 +20,14 @@ const send = (method, path, body) => fetch(getApiUrl(`${BASE}${path}`), {
 
 export const publishingApi = {
   status: () => fetch(getApiUrl(`${BASE}/status`)).then(jsonOrThrow),
-  connection: () => fetch(getApiUrl(`${BASE}/connection`)).then(jsonOrThrow),
+  // With a token, this tests THAT key without storing it — so you learn whether
+  // a pasted token works before it replaces one that might still be good.
+  connection: (token) => fetch(getApiUrl(`${BASE}/connection`), {
+    headers: token ? { 'X-Buffer-Key': token } : {},
+  }).then(jsonOrThrow),
+  saveToken: (token) => send('POST', '/token', { token }),
+  clearToken: () => fetch(getApiUrl(`${BASE}/token`), { method: 'DELETE' })
+    .then(jsonOrThrow),
   queue: () => fetch(getApiUrl(`${BASE}/queue`)).then(jsonOrThrow),
   ready: () => fetch(getApiUrl(`${BASE}/ready`)).then(jsonOrThrow),
   saveSettings: (patch) => send('PUT', '/settings', patch),
