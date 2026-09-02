@@ -17,6 +17,14 @@ whole stack in Docker. **It gets wiped periodically — treat it as disposable.*
 > `cache/` (the paid-asset content cache, `EXPLAINER_CACHE`) sits in the same
 > repo dir and survived that round, but it is exposed to the same risk. Treat a
 > finished render as gone unless it has been published or copied into `archive/`.
+>
+> A *second*, self-inflicted cause was fixed on 2026-09-02: `cleanup_jobs()` in
+> `app.py` rmtree'd anything under `output/` older than `JOB_RETENTION_SECONDS`
+> (24h), including `explainer-*` and `clips-*`. Those prefixes are now exempt
+> (`_is_purgeable`) — their retention is a lane decision, not a clock. A render
+> that vanishes now points at a wipe, not the purge. Candidates report
+> `has_render` from the filesystem so the dashboard says so instead of showing a
+> dead player.
 
 Access is over **Tailscale**, via a subnet router on persistent Proxmox
 infrastructure (so the box itself needs nothing installed):
@@ -118,6 +126,37 @@ falls back to `linear` and logs why. Force either with `--edit linear|loop`.
 
 Caveat: whisper's punctuation shifts with how much audio it is given, so re-cutting the
 same candidate can pick a different (still sentence-aligned) split.
+
+### Publishing (both lanes, one calendar)
+
+`publishing.py` + the dashboard's **Publishing** tab own everything about what
+goes out. Defaults come from `brand.py`; only what you change in the UI is stored
+(the `settings` table), so an untouched install behaves exactly like the brand file.
+
+```bash
+ssh gpu-pc 'curl -s localhost:8000/api/publishing/status | python3 -m json.tool'
+```
+
+- **Slots are exclusive across lanes.** Both lanes draw from the same
+  `publish_times`, so nothing double-books a minute. `per_day` caps how many of a
+  day's slots one lane may take.
+- **`paused`** is the master hold — stops both drips without stopping anything
+  else on the box.
+- **Clips is hand-queued by default** (`lanes.clips.auto = false`); explainer
+  keeps its 1/day auto-drip. The worker ticks both every `SCHEDULER_INTERVAL`.
+- **A dead Buffer token is the usual cause** of anything here failing, and it
+  fails silently everywhere else — the tab's first panel says so in words.
+  `BUFFER` lives in the box's `.env`; restart the backend after changing it.
+
+### Clip editor (clips lane)
+
+The original lane's subtitle / text-overlay tools work on clips candidates via a
+metadata shim (`clips/editor.py`) — no forked UI. Edits are additive files, so
+the output dir is the undo history.
+
+**A Remotion render already has captions burned in.** Burning a second set doubles
+them, so re-render clean first (`with_captions=False`, offered in the editor)
+before styling subtitles.
 
 **HTTP API / dashboard** — `openshorts.parkat.us` (Cloudflare Access), or curl
 `localhost:8000/api/explainer/*` on the box. Stage routes return `{job_id}`; poll
