@@ -150,16 +150,23 @@ def adopt(candidate_id, filename):
             "video_url": f"/videos/{job_id_for(candidate_id)}/{name}"}
 
 
+# Pipeline working files, not versions of the Short. `clip.mp4` is the raw 16:9
+# cut the renderer consumes — offering it as something to revert to would hand
+# you a horizontal video with no captions and call it an earlier edit.
+INTERMEDIATES = {"clip.mp4"}
+
+
 def history(candidate_id):
-    """Every MP4 in the candidate's output dir, newest first — the edit chain.
+    """Every version of the Short in the candidate's output dir, newest first.
 
     Editing is additive (`subtitled_`, `hooked_`, `edited_` prefixes stack), so
     the directory listing IS the undo history; surfacing it lets you step back to
     any earlier version without re-rendering.
     """
     d = cand_dir(candidate_id)
-    files = sorted(glob.glob(os.path.join(d, "*.mp4")), key=os.path.getmtime,
-                   reverse=True)
+    files = [p for p in sorted(glob.glob(os.path.join(d, "*.mp4")),
+                               key=os.path.getmtime, reverse=True)
+             if os.path.basename(p) not in INTERMEDIATES]
     cur = current_file(candidate_id)
     return [{"filename": os.path.basename(p),
              "video_url": f"/videos/{job_id_for(candidate_id)}/{os.path.basename(p)}",
