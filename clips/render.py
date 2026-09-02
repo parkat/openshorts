@@ -41,8 +41,15 @@ def cand_url(candidate_id, filename):
 
 
 def build_props(candidate_id, duration_ms, captions, attribution="", theme=None,
-                fps=FPS, width=WIDTH, height=HEIGHT):
-    """Assemble the ExplainerShort inputProps for a single-clip Short."""
+                fps=FPS, width=WIDTH, height=HEIGHT, with_captions=True):
+    """Assemble the ExplainerShort inputProps for a single-clip Short.
+
+    `with_captions=False` renders the same Short with no caption track. That is
+    what the clip editor needs: its subtitle pass burns styled subtitles with
+    ffmpeg, and burning them over Remotion's would leave two sets of words on
+    screen. Rendering clean is the only way to hand the editor a blank canvas —
+    the captions are already in the composite once it has run.
+    """
     scene = {
         "type": "accent_clip",
         "startMs": 0,
@@ -60,18 +67,19 @@ def build_props(candidate_id, duration_ms, captions, attribution="", theme=None,
         # The clip's own audio is the master track (see module docstring).
         "narrationUrl": cand_url(candidate_id, "audio.wav"),
         "musicUrl": None,
-        "captions": captions or [],
+        "captions": (captions or []) if with_captions else [],
         "scenes": [scene],
         "theme": theme or brand_theme(),
     }
 
 
 def render(candidate_id, duration_ms, captions, attribution="", mood=None,
-           service_url=None, poll=True):
+           service_url=None, poll=True, with_captions=True):
     """Build props -> submit -> (optionally) poll. Returns the render-service job."""
     props = build_props(candidate_id, duration_ms, captions,
                         attribution=attribution,
-                        theme=brand_theme(mood) if mood else None)
+                        theme=brand_theme(mood) if mood else None,
+                        with_captions=with_captions)
     job_id = job_id_for(candidate_id)
     render_id = submit_render(props, job_id, clip_index=0, service_url=service_url)
     if not poll:

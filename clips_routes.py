@@ -159,6 +159,9 @@ class CutBody(BaseModel):
 class RenderBody(BaseModel):
     candidate_id: int
     mood: str = ""
+    # Off when the clip editor's own subtitle pass will burn the words instead —
+    # two caption tracks on one frame is the failure this prevents.
+    captions: bool = True
 
 
 class RunBody(BaseModel):
@@ -193,7 +196,8 @@ def post_cut(body: CutBody):
 @router.post("/render")
 def post_render(body: RenderBody):
     return _launch("render", body.candidate_id, service.run_render,
-                   {"candidate_id": body.candidate_id, "mood": body.mood or None})
+                   {"candidate_id": body.candidate_id, "mood": body.mood or None,
+                    "with_captions": body.captions})
 
 
 @router.post("/run")
@@ -239,3 +243,104 @@ def delete_source(source_id: int):
         return service.delete_source(source_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+# --- publish copy ------------------------------------------------------------
+
+class CandidatePatch(BaseModel):
+    title: str | None = None
+    hook: str | None = None
+    caption: str | None = None
+    mood: str | None = None
+    # Word-level [{text,startMs,endMs}] — what the editor's text pane produces.
+    captions: list[dict] | None = None
+
+
+@router.patch("/candidates/{candidate_id}")
+def patch_candidate(candidate_id: int, body: CandidatePatch):
+    """Edit the text that ships with the clip. Synchronous — it is a DB write."""
+    try:
+        detail = service.update_candidate(candidate_id, **body.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    detail["video_url"] = _media_url(detail.get("render_path"))
+    return detail
+
+
+# --- clip editor (the original project's subtitle / hook / effects tools) -----
+#
+# These do not edit anything themselves. They write the metadata shim that makes
+# a candidate readable by /api/subtitle, /api/hook and /api/edit, and then adopt
+# whatever file those produce. See clips/editor.py.
+
+class AdoptBody(BaseModel):
+    filename: str
+
+
+@router.post("/candidates/{candidate_id}/editor")
+def open_editor(candidate_id: int):
+    """Prepare a candidate for the clip editor and return how to address it."""
+    from clips import editor
+    try:
+        info = editor.write_shim(candidate_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    info["history"] = editor.history(candidate_id)
+    return info
+
+
+@router.get("/candidates/{candidate_id}/editor")
+def editor_state(candidate_id: int):
+    """Current file + edit history, without rewriting the shim."""
+    from clips import editor
+    return {"job_id": editor.job_id_for(candidate_id), "clip_index": 0,
+            "filename": editor.current_file(candidate_id),
+            "history": editor.history(candidate_id)}
+
+
+@router.post("/candidates/{candidate_id}/adopt")
+def adopt_edit(candidate_id: int, body: AdoptBody):
+    """Make an edited file the candidate's official render."""
+    from clips import editor
+    try:
+        return editor.adopt(candidate_id, body.filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# --- publishing --------------------------------------------------------------
+
+class PublishBody(BaseModel):
+    due_at: str | None = None   # ISO8601; omitted = the next free slot
+
+
+@router.post("/candidates/{candidate_id}/publish")
+def publish_candidate(candidate_id: int, body: PublishBody):
+    """Queue an approved clip into the shared Buffer calendar.
+
+    Synchronous: it is one HTTP call per channel and the caller needs the error
+    text (a dead token, a paused calendar) rather than a job id to poll.
+    """
+    import datetime
+    from clips import publish
+    due = None
+    if body.due_at:
+        try:
+            due = datetime.datetime.fromisoformat(body.due_at)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"bad due_at: {body.due_at}")
+    try:
+        return publish.publish_candidate(candidate_id, due=due)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/publishable")
+def publishable():
+    """Approved, rendered, unqueued candidates — what the drip would pick from."""
+    from clips import publish
+    ids = publish.ready_candidate_ids()
+    rows = [r for r in service.list_candidates() if r["id"] in ids]
+    for r in rows:
+        r["video_url"] = _media_url(r.get("render_path"))
+    return {"candidates": rows}

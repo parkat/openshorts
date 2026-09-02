@@ -252,6 +252,14 @@ try:
 except Exception as _exc:  # pragma: no cover — never let it break the whole server
     print(f"⚠️ clips routes not mounted: {_exc}")
 
+# Publishing — the shared Buffer calendar both lanes queue into. Mounted last
+# because it reaches back into both of them to answer "what is ready to go out".
+try:
+    from publishing_routes import router as publishing_router
+    app.include_router(publishing_router)
+except Exception as _exc:  # pragma: no cover — never let it break the whole server
+    print(f"⚠️ publishing routes not mounted: {_exc}")
+
 # ---------------------------------------------------------------------------
 # Edit presets (backend-synced, so they're available on every device) + batch
 # download. Presets live in the project dir (bind-mounted), NOT in OUTPUT_DIR

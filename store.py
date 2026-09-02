@@ -72,12 +72,21 @@ class Clip(Base):
 
 
 class ScheduleItem(Base):
+    """One platform-post of one video, queued into Buffer for a future slot.
+
+    `lane` says which table `project_id` points into: "explainer" -> projects.id,
+    "clips" -> clip_candidates.id. The column is a discriminator rather than a
+    second table because the queue is a single publishing calendar — both lanes
+    compete for the same slots, and a view that showed only half of it would let
+    you double-book the same minute.
+    """
     __tablename__ = "schedule"
     id = Column(Integer, primary_key=True)
     project_id = Column(Integer, ForeignKey("projects.id"))
+    lane = Column(String, default="explainer")  # explainer|clips
     platform = Column(String)                 # youtube|tiktok|instagram
     due_at = Column(DateTime)
-    status = Column(String, default="queued") # queued|posted|failed
+    status = Column(String, default="queued") # queued|posted|failed|cancelled
     buffer_post_id = Column(String, default="")
 
 
@@ -85,6 +94,7 @@ class Post(Base):
     __tablename__ = "posts"
     id = Column(Integer, primary_key=True)
     project_id = Column(Integer, ForeignKey("projects.id"))
+    lane = Column(String, default="explainer")  # see ScheduleItem.lane
     platform = Column(String)
     url = Column(String, default="")
     buffer_post_id = Column(String, default="")
@@ -198,8 +208,27 @@ class ClipCandidate(Base):
     audio_path = Column(String, default="")    # extracted master audio
     captions = Column(JSON, default=list)      # [{text,startMs,endMs}] word-level
     render_path = Column(String, default="")   # finished 9:16 MP4
-    status = Column(String, default="candidate")  # candidate|cut|rendered|approved|rejected
+    # What actually gets posted. Empty means "use the title" — the fallback is
+    # resolved at post time rather than copied in at cut time, so re-titling a
+    # candidate you never hand-wrote a caption for still changes what goes out.
+    caption = Column(Text, default="")
+    status = Column(String, default="candidate")  # candidate|cut|rendered|approved|rejected|scheduled
     created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+
+class Setting(Base):
+    """Runtime-editable configuration, one JSON blob per key.
+
+    `brand.py` stays the source of the DEFAULTS — it is version-controlled and
+    reviewable. This table holds only what a human has since overridden from the
+    dashboard, so an untouched install behaves exactly like the brand file and
+    `git diff` never fills up with settings churn. See publishing.py.
+    """
+    __tablename__ = "settings"
+    id = Column(Integer, primary_key=True)
+    key = Column(String, unique=True, index=True)
+    value = Column(JSON, default=dict)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
 

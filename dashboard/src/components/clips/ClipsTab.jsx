@@ -6,6 +6,7 @@ import { clipsApi, MOODS, EDITS, DEFAULT_EDIT, fmtClock } from './api';
 import useClipsJob from './useClipsJob';
 import JobLog from './JobLog';
 import CandidateCard from './CandidateCard';
+import ClipEditorModal from './ClipEditorModal';
 
 // The clips lane: one long video in, many standalone Shorts out.
 //
@@ -22,6 +23,7 @@ export default function ClipsTab() {
   const [candidates, setCandidates] = useState([]);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [editing, setEditing] = useState(null);
 
   const loadSources = useCallback(async () => {
     try {
@@ -280,6 +282,7 @@ export default function ClipsTab() {
                       busy={running}
                       onRun={(starter) => run(starter)}
                       onChanged={() => loadCandidates(selected)}
+                      onEdit={setEditing}
                     />
                   ))}
                 </div>
@@ -288,6 +291,14 @@ export default function ClipsTab() {
           )}
         </div>
       </div>
+
+      {editing && (
+        <ClipEditorModal
+          candidate={editing}
+          onClose={() => setEditing(null)}
+          onChanged={() => loadCandidates(selected)}
+        />
+      )}
     </div>
   );
 }

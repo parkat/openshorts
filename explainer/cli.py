@@ -202,18 +202,34 @@ def cmd_cache(args):
 
 
 def cmd_worker(args):
-    """Background loop: tick the 1/day scheduler. (Optional radar lands in Phase 3.)"""
+    """Background loop: drip each lane's approved work into the publishing calendar.
+
+    Both lanes tick on the same pass so they compete for slots through one shared
+    calendar rather than two schedulers racing each other. Each lane's tick is a
+    no-op unless its auto-drip is on (see publishing.py) — the clips lane ships
+    with it OFF, because a batch of ten from one source is meant to be released
+    deliberately.
+    """
     store.init_db()
     from explainer import schedule as sch
+    from clips import publish as clips_publish
     interval = int(os.environ.get("SCHEDULER_INTERVAL", "900"))
-    print(f"explainer worker alive — scheduler tick every {interval}s", flush=True)
+    print(f"worker alive — publishing tick every {interval}s", flush=True)
     while True:
         try:
             res = sch.tick()
             if res:
-                print(f"[worker] scheduled project #{res['project_id']} for {res['due_at']}", flush=True)
+                print(f"[worker] scheduled project #{res['project_id']} "
+                      f"for {res['due_at']}", flush=True)
         except Exception as e:  # noqa: BLE001 — a bad tick must not kill the loop
-            print(f"[worker] scheduler tick failed: {e}", flush=True)
+            print(f"[worker] explainer tick failed: {e}", flush=True)
+        try:
+            res = clips_publish.tick(log=lambda m: None)
+            if res:
+                print(f"[worker] queued clip #{res['ref_id']} "
+                      f"for {res['due_at']}", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[worker] clips tick failed: {e}", flush=True)
         time.sleep(interval)
 
 

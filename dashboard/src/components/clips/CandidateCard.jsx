@@ -1,18 +1,41 @@
 import React, { useState } from 'react';
 import {
   Scissors, Clapperboard, Check, X, Trash2, ChevronDown, ChevronUp, Download, Repeat,
+  Wand2, Send, Loader2,
 } from 'lucide-react';
 import { clipsApi, STATUS_TINT, fmtClock, getApiUrl } from './api';
 
 // One proposed Short. Shows the model's case for the moment (score, why, the
 // words actually spoken) so the call to cut it is made on evidence, and plays
 // the render inline once there is one.
-export default function CandidateCard({ candidate: c, mood, edit, busy, onRun, onChanged }) {
+export default function CandidateCard({ candidate: c, mood, edit, busy, onRun, onChanged, onEdit }) {
   const [open, setOpen] = useState(false);
-  const rendered = c.status === 'rendered' || c.status === 'approved' || c.status === 'rejected';
+  const [queueing, setQueueing] = useState(false);
+  const [queueError, setQueueError] = useState(null);
+  const rendered = ['rendered', 'approved', 'rejected', 'scheduled'].includes(c.status);
   const isCut = c.status === 'cut' || rendered;
 
   const act = async (fn) => { await fn(); onChanged?.(); };
+
+  // Queueing is synchronous and can fail for reasons you need to read (a dead
+  // token, a paused calendar), so the error lands on the card rather than in a
+  // job log you would have to go looking for.
+  const queue = async () => {
+    setQueueing(true);
+    setQueueError(null);
+    try {
+      const res = await clipsApi.publish(c.id);
+      const bad = (res.results || []).filter((r) => !r.ok);
+      if (bad.length === (res.results || []).length) {
+        throw new Error(bad[0]?.error || 'Buffer accepted nothing');
+      }
+      onChanged?.();
+    } catch (e) {
+      setQueueError(e.message);
+    } finally {
+      setQueueing(false);
+    }
+  };
 
   return (
     <div className="glass-panel p-4">
@@ -78,7 +101,26 @@ export default function CandidateCard({ candidate: c, mood, edit, busy, onRun, o
             <Clapperboard size={13} /> {rendered ? 'Re-render' : 'Render'}
           </button>
         )}
-        {rendered && c.status !== 'approved' && (
+        {rendered && (
+          <button
+            onClick={() => onEdit?.(c)}
+            className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-300 transition-colors"
+            title="subtitles, text overlay, publish copy"
+          >
+            <Wand2 size={13} /> Edit
+          </button>
+        )}
+        {c.status === 'approved' && (
+          <button
+            onClick={queue}
+            disabled={queueing}
+            className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 disabled:opacity-40 transition-colors"
+            title="queue into the shared publishing calendar"
+          >
+            {queueing ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />} Queue
+          </button>
+        )}
+        {rendered && !['approved', 'scheduled'].includes(c.status) && (
           <button
             onClick={() => act(() => clipsApi.approve(c.id))}
             className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 transition-colors"
@@ -117,6 +159,10 @@ export default function CandidateCard({ candidate: c, mood, edit, busy, onRun, o
           <Trash2 size={13} />
         </button>
       </div>
+
+      {queueError && (
+        <p className="text-[11px] text-red-300 mt-2 leading-relaxed">{queueError}</p>
+      )}
 
       {open && (
         <div className="mt-3 pt-3 border-t border-white/5 space-y-2">

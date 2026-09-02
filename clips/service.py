@@ -253,8 +253,13 @@ def run_cut(candidate_id, edit=None, log=print):
             "uploader": uploader}
 
 
-def run_render(candidate_id, mood=None, no_wait=False, service_url=None, log=print):
-    """Cut clip + captions -> a finished 9:16 MP4."""
+def run_render(candidate_id, mood=None, no_wait=False, service_url=None,
+               with_captions=True, log=print):
+    """Cut clip + captions -> a finished 9:16 MP4.
+
+    `with_captions=False` leaves the words off, for when the clip editor's own
+    subtitle pass will burn them instead (see clips/editor.py).
+    """
     from clips import render as rnd
     from clips.cut import duration_s
 
@@ -275,8 +280,11 @@ def run_render(candidate_id, mood=None, no_wait=False, service_url=None, log=pri
 
     log(f"rendering #{candidate_id} ({duration_ms / 1000:.1f}s) "
         f"via {rnd.RENDER_SERVICE_URL} …")
+    if not with_captions:
+        log("  rendering without captions (the editor will burn its own)")
     job = rnd.render(candidate_id, duration_ms, captions, attribution=attribution,
-                     mood=mood, service_url=(service_url or None), poll=not no_wait)
+                     mood=mood, service_url=(service_url or None), poll=not no_wait,
+                     with_captions=with_captions)
     if no_wait:
         log(f"  submitted render {job['renderId']} (not waiting)")
         return job
@@ -328,6 +336,30 @@ def set_status(candidate_id, status, log=print):
     return {"candidate_id": candidate_id, "status": status}
 
 
+EDITABLE_FIELDS = ("title", "hook", "caption", "mood", "captions")
+
+
+def update_candidate(candidate_id, log=print, **fields):
+    """Edit a candidate's text — title, hook, caption, mood, or its captions.
+
+    Only the fields actually passed are written, so a form that sends one input
+    cannot blank the rest. Nothing here re-encodes anything: `captions` is the
+    word list the next render or subtitle burn will use, which is how a fix typed
+    into the editor survives into the file rather than living in the preview.
+    """
+    changed = {k: v for k, v in fields.items()
+               if k in EDITABLE_FIELDS and v is not None}
+    if not changed:
+        return candidate_detail(candidate_id)
+    with store.session() as s:
+        cand = get_candidate(s, candidate_id)
+        for k, v in changed.items():
+            setattr(cand, k, v)
+        s.commit()
+    log(f"candidate #{candidate_id}: updated {', '.join(sorted(changed))}")
+    return candidate_detail(candidate_id)
+
+
 def candidate_detail(candidate_id):
     """Everything the studio view needs for one candidate, or None."""
     with store.session() as s:
@@ -340,6 +372,7 @@ def candidate_detail(candidate_id):
             "start_s": c.start_s, "end_s": c.end_s,
             "seconds": round(c.end_s - c.start_s, 1),
             "title": c.title, "hook": c.hook, "quote": c.quote,
+            "caption": c.caption or "",
             "reason": c.reason, "score": c.score, "mood": c.mood,
             "payoff_s": c.payoff_s or 0.0, "edit": c.edit or "linear",
             "kind": c.kind or "speech",
@@ -408,5 +441,5 @@ def list_candidates(source_id=None, status=""):
                  "title": r.title, "hook": r.hook, "score": r.score,
                  "reason": r.reason, "quote": r.quote,
                  "payoff_s": r.payoff_s or 0.0, "edit": r.edit or "linear",
-                 "kind": r.kind or "speech",
+                 "kind": r.kind or "speech", "caption": r.caption or "",
                  "render_path": r.render_path} for r in rows]

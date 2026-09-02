@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Upload, FileVideo, Sparkles, Youtube, Instagram, Share2, LogOut, ChevronDown, Check, Activity, LayoutDashboard, Settings, PlusCircle, History, Menu, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, FlaskConical, Scissors } from 'lucide-react';
+import { Upload, FileVideo, Sparkles, Youtube, Instagram, Share2, LogOut, ChevronDown, Check, Activity, LayoutDashboard, Settings, PlusCircle, History, Menu, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, FlaskConical, Scissors, Send } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import ResultCard from './components/ResultCard';
@@ -7,6 +7,7 @@ import ProcessingAnimation from './components/ProcessingAnimation';
 // import Gallery from './components/Gallery';
 import ThumbnailStudio from './components/ThumbnailStudio';
 import ClipsTab from './components/clips/ClipsTab';
+import PublishingTab from './components/publishing/PublishingTab';
 import UGCGallery from './components/UGCGallery';
 import ExplainerTab from './components/explainer/ExplainerTab';
 import ScheduleWeekModal from './components/ScheduleWeekModal';
@@ -565,6 +566,14 @@ function App() {
           <span className="font-medium hidden lg:block">Explainer</span>
         </button>
 
+        <button
+          onClick={() => setActiveTab('publishing')}
+          className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors ${activeTab === 'publishing' ? 'bg-sky-500/10 text-sky-400' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
+        >
+          <Send size={20} />
+          <span className="font-medium hidden lg:block">Publishing</span>
+        </button>
+
         {/* <button
           onClick={() => setActiveTab('gallery')}
           className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors ${activeTab === 'gallery' ? 'bg-primary/10 text-primary' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
@@ -883,6 +892,11 @@ function App() {
               its /api/saasshorts routes are still in the tree, just unmounted. */}
           {activeTab === 'clips' && (
             <ClipsTab />
+          )}
+
+          {/* View: Publishing — the shared Buffer calendar for every lane */}
+          {activeTab === 'publishing' && (
+            <PublishingTab />
           )}
 
           {/* View: Explainer lane */}

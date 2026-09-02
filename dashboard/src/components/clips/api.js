@@ -21,6 +21,12 @@ const postJson = (path, body) => fetch(getApiUrl(`${BASE}${path}`), {
 
 const del = (path) => fetch(getApiUrl(`${BASE}${path}`), { method: 'DELETE' }).then(jsonOrThrow);
 
+const patchJson = (path, body) => fetch(getApiUrl(`${BASE}${path}`), {
+  method: 'PATCH',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body || {}),
+}).then(jsonOrThrow);
+
 export const clipsApi = {
   // reads
   sources: () => fetch(getApiUrl(`${BASE}/sources`)).then(jsonOrThrow),
@@ -41,8 +47,16 @@ export const clipsApi = {
   // direct actions
   approve: (id) => postJson(`/candidates/${id}/approve`, {}),
   reject: (id) => postJson(`/candidates/${id}/reject`, {}),
+  update: (id, fields) => patchJson(`/candidates/${id}`, fields),
   deleteCandidate: (id) => del(`/candidates/${id}`),
   deleteSource: (id) => del(`/sources/${id}`),
+  // clip editor — prepares the candidate for the shared /api/subtitle|hook|edit
+  // endpoints, then adopts whatever file they produce as the official render.
+  openEditor: (id) => postJson(`/candidates/${id}/editor`, {}),
+  editorState: (id) => fetch(getApiUrl(`${BASE}/candidates/${id}/editor`)).then(jsonOrThrow),
+  adopt: (id, filename) => postJson(`/candidates/${id}/adopt`, { filename }),
+  // publishing
+  publish: (id, dueAt) => postJson(`/candidates/${id}/publish`, { due_at: dueAt || null }),
 };
 
 // ClipCandidate.status → tailwind tint. Mirrors the lane's state machine.
@@ -51,6 +65,7 @@ export const STATUS_TINT = {
   cut: 'bg-amber-500/15 text-amber-300',
   rendered: 'bg-violet-500/15 text-violet-300',
   approved: 'bg-emerald-500/15 text-emerald-300',
+  scheduled: 'bg-sky-500/15 text-sky-300',
   rejected: 'bg-red-500/15 text-red-300',
 };
 

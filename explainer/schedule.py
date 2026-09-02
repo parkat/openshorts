@@ -1,83 +1,33 @@
-"""Schedule stage: drip approved explainer renders 1/day at 06:00 America/Los_Angeles.
+"""Schedule stage: drip approved explainer renders into the publishing calendar.
 
-Reuses the verified Buffer + media.parkat.us path: we POST to the backend's
-`/api/buffer/*` endpoints (internal docker network, bypassing Cloudflare Access),
-which host the render by tokenized media URL and createPost per channel. The
-`due_at` is a computed 06:00-LA slot (customScheduled), so Buffer publishes at the
-brand's daily time regardless of when the worker ticks.
+The cadence, the platforms, the timezone and the pause switch all live in
+`publishing.py` now (defaults from brand.py, overrides from the dashboard), and
+so does the Buffer call and the slot arithmetic — this module is left with the
+part that is genuinely explainer-specific: finding the newest render for a
+project and writing the per-platform captions from its script.
 
-Cadence is one project per calendar day: a day that already has a scheduled item
-is skipped when picking the next slot.
-
-Pure helpers (`next_slot`, `build_descriptions`, `match_channels`, `latest_render`)
-are unit-testable; the HTTP + store writes live in `schedule_project` / `tick`.
+`next_slot` and `match_channels` remain as thin delegates so existing callers and
+tests keep working against one implementation rather than a copy of it.
 """
 import os
 import glob
 import json
-import datetime
-from zoneinfo import ZoneInfo
-
-import requests
 
 import store
-from explainer.brand import BRAND
+import publishing
 
-BACKEND_URL = os.environ.get("BACKEND_URL", "http://backend:8000").rstrip("/")
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", os.path.join(os.getcwd(), "output"))
 PLATFORMS = ("youtube", "tiktok", "instagram")
 
 
-def _tz():
-    return ZoneInfo(BRAND.get("timezone", "America/Los_Angeles"))
-
-
-def _publish_times():
-    """The brand's daily publish slots as [(hh, mm), ...], earliest first.
-    `publish_times` (list) wins; falls back to the legacy single `publish_time`."""
-    raw = BRAND.get("publish_times") or [BRAND.get("publish_time", "06:00")]
-    out = []
-    for t in raw:
-        hh, mm = (str(t).split(":") + ["0"])[:2]
-        out.append((int(hh), int(mm)))
-    return sorted(set(out))
-
-
 def next_slot(taken_slots, now=None):
-    """Next free publish slot (tz-aware) in the brand timezone.
+    """Next free publish slot in the configured timezone.
 
-    Supports N slots per day (e.g. 04:00 + 17:00): walks forward through
-    day x slot-time and returns the first candidate that is in the future and
-    not already taken.
-
-    `taken_slots`: iterable of datetimes already scheduled — tz-aware, or naive
-    which is read as UTC (that's how ScheduleItem.due_at is persisted). `now`:
-    tz-aware datetime, injectable for tests.
+    Delegates to `publishing.next_slot` so the explainer lane and the clips lane
+    cannot disagree about when the slots are — see publishing.py for why the
+    calendar is shared.
     """
-    tz = _tz()
-    now = now or datetime.datetime.now(tz)
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=tz)
-    now = now.astimezone(tz)
-
-    taken = set()
-    for d in (taken_slots or []):
-        if d is None:
-            continue
-        if isinstance(d, datetime.datetime):
-            if d.tzinfo is None:                      # stored naive-UTC
-                d = d.replace(tzinfo=datetime.timezone.utc)
-            taken.add(d.astimezone(tz).replace(second=0, microsecond=0))
-
-    times = _publish_times()
-    for day_offset in range(0, 120):
-        day = (now + datetime.timedelta(days=day_offset)).date()
-        for hh, mm in times:
-            cand = datetime.datetime(day.year, day.month, day.day, hh, mm, tzinfo=tz)
-            if cand <= now or cand in taken:
-                continue
-            return cand
-    raise RuntimeError("no free publish slot in the next 120 days")
+    return publishing.next_slot(taken_slots, now=now)
 
 
 def _credits(script):
@@ -112,23 +62,9 @@ def build_descriptions(script, footage_credit=None):
 
 
 def match_channels(buffer_channels):
-    """Map the brand's configured platforms to Buffer channel ids.
-
-    Prefer a name/handle match against BRAND['channels']; else the first channel
-    of that service. Returns [{id, service}] for platforms that resolved."""
-    want = BRAND.get("channels", {})
-    resolved = []
-    for service in PLATFORMS:
-        handle = (want.get(service) or "").lower()
-        cands = [c for c in buffer_channels if c.get("service") == service]
-        if not cands:
-            continue
-        pick = next(
-            (c for c in cands if handle and handle in (c.get("name", "").lower())),
-            cands[0],
-        )
-        resolved.append({"id": pick["id"], "service": service})
-    return resolved
+    """Map the enabled platforms to Buffer channel ids -> [{id, service}]."""
+    return [{"id": c["id"], "service": c["service"]}
+            for c in publishing.resolve_channels(buffer_channels)]
 
 
 def latest_render(project_id, output_dir=None):
@@ -139,36 +75,29 @@ def latest_render(project_id, output_dir=None):
     return os.path.basename(files[-1]) if files else None
 
 
-# --- HTTP to the backend's Buffer endpoints (reuses media hosting + BUFFER key) ---
-
-def _get_channels(backend_url=None):
-    r = requests.get(f"{(backend_url or BACKEND_URL).rstrip('/')}/api/buffer/channels", timeout=40)
-    r.raise_for_status()
-    return r.json().get("channels", [])
-
-
-def _post_buffer(job_id, filename, title, channels, due_iso, backend_url=None):
-    body = {
-        "job_id": job_id,
-        "clip_index": 0,
-        "filename": filename,
-        "title": title,
-        "channels": channels,
-        "schedule_iso": due_iso,
-        "scheduling": "automatic",
-    }
-    r = requests.post(f"{(backend_url or BACKEND_URL).rstrip('/')}/api/buffer/post",
-                      json=body, timeout=90)
-    r.raise_for_status()
-    return r.json()
+def _captions_for(project_id, draft, proj):
+    """Per-platform text + title for one project's post."""
+    from explainer.render import job_id_for
+    footage_credit = None
+    apath = os.path.join(OUTPUT_DIR, job_id_for(project_id), "assets.json")
+    if os.path.isfile(apath):
+        try:
+            with open(apath, encoding="utf-8") as af:
+                footage_credit = (json.load(af) or {}).get("footage_credit")
+        except (ValueError, OSError):
+            pass
+    script = draft.script or {}
+    return (script.get("title") or proj.title,
+            build_descriptions(script, footage_credit))
 
 
 def schedule_project(project_id, s=None, now=None, backend_url=None):
-    """Schedule one project's render to all resolved platforms at the next slot.
+    """Queue one project's newest render to every enabled platform.
 
-    Records ScheduleItem + Post rows and flips the project to 'scheduled'. Returns
-    a summary dict. Raises if there's no render or no channels resolve."""
-    from explainer.render import job_id_for
+    The slot arithmetic, the Buffer call and the ScheduleItem/Post rows all live
+    in `publishing.queue` — shared with the clips lane so one calendar governs
+    both. What stays here is the explainer-specific part: which file, what text.
+    """
     own = s is None
     s = s or store.session()
     try:
@@ -180,57 +109,33 @@ def schedule_project(project_id, s=None, now=None, backend_url=None):
                  .order_by(store.Draft.id.desc()).first())
         if not draft:
             raise ValueError(f"project #{project_id} has no draft")
-
         filename = latest_render(project_id)
         if not filename:
             raise ValueError(f"project #{project_id} has no render yet")
-
-        # Only live rows hold a slot — cancelled/failed ones free theirs back up.
-        taken = [d for (d, st) in s.query(store.ScheduleItem.due_at,
-                                          store.ScheduleItem.status).all()
-                 if d and st in ("queued", "posted")]
-        slot = next_slot(taken, now=now)
-        due_iso = slot.isoformat()
-
-        channels = match_channels(_get_channels(backend_url))
-        if not channels:
-            raise ValueError("no Buffer channels resolved for the brand platforms")
-
-        # Footage attribution (e.g. Pixabay) recorded by the assets stage.
-        footage_credit = None
-        apath = os.path.join(OUTPUT_DIR, job_id_for(project_id), "assets.json")
-        if os.path.isfile(apath):
-            try:
-                with open(apath, encoding="utf-8") as af:
-                    footage_credit = (json.load(af) or {}).get("footage_credit")
-            except (ValueError, OSError):
-                pass
-        descriptions = build_descriptions(draft.script or {}, footage_credit)
-        title = (draft.script or {}).get("title") or proj.title
-        # Attach per-service text.
-        for ch in channels:
-            ch["text"] = descriptions.get(ch["service"], title)
-
-        result = _post_buffer(job_id_for(project_id), filename, title, channels,
-                              due_iso, backend_url)
-
-        by_service = {r["service"]: r for r in result.get("results", [])}
-        for ch in channels:
-            res = by_service.get(ch["service"], {})
-            s.add(store.ScheduleItem(project_id=project_id, platform=ch["service"],
-                                     due_at=slot.astimezone(datetime.timezone.utc).replace(tzinfo=None),
-                                     status="queued" if res.get("ok") else "failed",
-                                     buffer_post_id=res.get("post_id") or ""))
-            if res.get("ok"):
-                s.add(store.Post(project_id=project_id, platform=ch["service"],
-                                 buffer_post_id=res.get("post_id") or ""))
-        proj.status = "scheduled"
-        s.commit()
-        return {"project_id": project_id, "due_at": due_iso,
-                "video_url": result.get("video_url"), "results": result.get("results", [])}
+        title, descriptions = _captions_for(project_id, draft, proj)
     finally:
         if own:
             s.close()
+
+    from explainer.render import job_id_for
+    slot = None
+    if now is not None:
+        cfg = (publishing.get_settings().get("lanes") or {}).get("explainer") or {}
+        slot = publishing.next_slot(publishing.live_slots(), now=now,
+                                    lane_taken=publishing.live_slots("explainer"),
+                                    per_day=cfg.get("per_day"))
+    result = publishing.queue("explainer", project_id, job_id_for(project_id),
+                              filename, title, text_by_service=descriptions,
+                              due=slot, backend_url=backend_url)
+
+    if any(r.get("ok") for r in result.get("results", [])):
+        with store.session() as s2:
+            p2 = s2.get(store.Project, project_id)
+            if p2:
+                p2.status = "scheduled"
+                s2.commit()
+    return {"project_id": project_id, "due_at": result["due_at"],
+            "video_url": result.get("video_url"), "results": result.get("results", [])}
 
 
 def _ready_project_ids(s):
@@ -250,8 +155,17 @@ def _ready_project_ids(s):
 
 
 def tick(now=None, backend_url=None):
-    """One scheduler pass: schedule at most one ready project for the next open
-    day (enforces 1/day). Returns the summary dict, or None if nothing to do."""
+    """One scheduler pass: queue at most one ready project.
+
+    Returns the summary dict, or None when there is nothing to do — including
+    when publishing is paused or this lane's auto-drip is switched off, which is
+    checked here so the worker simply idles instead of logging a failure a
+    quarter-hour at a time.
+    """
+    st = publishing.get_settings()
+    cfg = (st.get("lanes") or {}).get("explainer") or {}
+    if st.get("paused") or not cfg.get("enabled", True) or not cfg.get("auto", True):
+        return None
     s = store.session()
     try:
         ready = _ready_project_ids(s)
