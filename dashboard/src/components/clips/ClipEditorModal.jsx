@@ -125,10 +125,13 @@ export default function ClipEditorModal({ candidate, onClose, onChanged }) {
 
   const writeTags = () => run('tags', async () => {
     const res = await clipsApi.hashtags(candidate.id);
-    setTags((res.hashtags || []).join(' '));
     if (res.captions) setCaptions(res.captions);
+    // A failed call leaves the stored tags alone, so leave the box alone too.
+    if (!res.hashtags?.length) {
+      throw new Error(res.error || 'the model returned no tags — try again');
+    }
+    setTags(res.hashtags.join(' '));
     setSavedCopy(true);
-    if (!res.hashtags?.length) throw new Error('the model returned no tags — try again');
   });
 
   const rerenderClean = () => run('rerender', async () => {

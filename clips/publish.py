@@ -78,12 +78,14 @@ def generate_hashtags(candidate_id, count=None, model=None, log=print):
             raise ValueError(f"candidate #{candidate_id} not found")
         title, hook, quote = cand.title or "", cand.hook or "", cand.quote or ""
     log(f"writing hashtags for #{candidate_id} …")
-    tags = tags_mod.generate(title=title, hook=hook, quote=quote, count=n,
-                             model=model, log=log)
-    with store.session() as s:
-        s.get(store.ClipCandidate, candidate_id).hashtags = tags
-        s.commit()
-    return {"candidate_id": candidate_id, "hashtags": tags,
+    tags, error = tags_mod.generate(title=title, hook=hook, quote=quote, count=n,
+                                    model=model, log=log)
+    # Only overwrite on success. A failed call must not wipe tags you already had.
+    if tags:
+        with store.session() as s:
+            s.get(store.ClipCandidate, candidate_id).hashtags = tags
+            s.commit()
+    return {"candidate_id": candidate_id, "hashtags": tags, "error": error,
             "captions": captions_for_id(candidate_id, st)}
 
 

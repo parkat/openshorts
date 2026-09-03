@@ -45,6 +45,11 @@ DEFAULT_COUNT = 10
 # the other two treat a long block as noise.
 PLATFORM_LIMIT = {"youtube": 12, "tiktok": 12, "instagram": 20}
 
+# Ten hashtags is ~100 tokens of output, but the draft model reasons before it
+# writes and that thinking comes out of the same budget — at 600 it spent the lot
+# on reasoning and returned nothing. Sized like the rest of the codebase instead.
+MAX_TOKENS = 4000
+
 _TAG_RE = re.compile(r"#?([A-Za-z0-9_]+)")
 
 SYSTEM = """You write hashtags for short-form video. Given one clip, return the tags a
@@ -127,32 +132,35 @@ def _extract(raw):
 
 def generate(title="", hook="", quote="", extra="", count=DEFAULT_COUNT,
              model=None, key=None, log=print):
-    """Content tags for one clip. One cheap model call; returns [] rather than raising.
+    """Content tags for one clip -> (tags, error). One cheap model call.
 
-    Failing soft is deliberate: hashtags are an enhancement to a post that is
-    otherwise ready, and a model hiccup should not block publishing. The platform
-    tags still get appended either way.
+    Returns rather than raises: hashtags enhance a post that is otherwise ready,
+    so a model hiccup must not block publishing — the platform tags still get
+    appended either way. The reason comes back with the empty list so a caller
+    can put it in front of someone, instead of leaving "no tags" to be explained
+    by reading a container log.
     """
     parts = [p for p in (f"Title: {title}" if title else "",
                          f"On-screen hook: {hook}" if hook else "",
                          f"What is said: {quote[:1200]}" if quote else "",
                          extra) if p]
     if not parts:
-        return []
+        return [], "nothing to describe — this clip has no title, hook or transcript"
     prompt = "\n".join(parts) + f"\n\nReturn exactly {count} hashtags."
     try:
         out = orc.chat([{"role": "system", "content": SYSTEM},
                         {"role": "user", "content": prompt}],
                        model=model or orc.MODELS["draft"], temperature=0.4,
-                       max_tokens=600, key=key)
+                       max_tokens=MAX_TOKENS, key=key)
         tags = dedupe(_extract(out))
     except Exception as e:  # noqa: BLE001 — never block a post on a tag call
-        log(f"  hashtag generation failed ({e}) — continuing without content tags")
-        return []
+        msg = str(e)
+        log(f"  hashtag generation failed ({msg}) — continuing without content tags")
+        return [], msg
     # Drop anything the model returned that is really a platform tag; those are
     # appended from settings and would otherwise take a slot twice.
     routing = {t for tags_ in DEFAULT_PLATFORM_TAGS.values() for t in tags_}
     routing |= {"#viral", "#trending", "#foryou", "#fy"}
-    tags = [t for t in tags if t not in routing]
+    tags = [t for t in tags if t not in routing][:count]
     log(f"  {len(tags)} content hashtag(s): {' '.join(tags)}")
-    return tags[:count]
+    return tags, ""
