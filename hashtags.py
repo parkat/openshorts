@@ -107,14 +107,22 @@ def compose(text, content_tags, platform, settings=None):
     Deduped across both groups, so a generated '#reels' cannot appear twice, and
     capped per platform. Tags already written into the body are respected — if you
     hand-wrote a caption ending in tags, they are not repeated below it.
+
+    When the cap bites it is the CONTENT tags that get trimmed, never the platform
+    ones: the platform tags decide which surface the video is eligible for, so
+    dropping '#fyp' to make room for a tenth descriptive tag would cost reach to
+    buy nothing. They are reserved first and still printed last.
     """
     st = settings or {}
     body = (text or "").strip()
     in_body = {normalize(m) for m in re.findall(r"#[A-Za-z0-9_]+", body)}
-    tags = [t for t in dedupe(list(content_tags or []) + platform_tags(platform, st))
-            if t not in in_body]
     limit = PLATFORM_LIMIT.get(platform, 12)
-    tags = tags[:limit]
+
+    plat = [t for t in platform_tags(platform, st) if t not in in_body][:limit]
+    content = [t for t in dedupe(content_tags)
+               if t not in in_body and t not in plat][:max(0, limit - len(plat))]
+
+    tags = content + plat
     if not tags:
         return body
     return f"{body}\n\n{' '.join(tags)}".strip()
