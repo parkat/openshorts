@@ -13,12 +13,13 @@ import os
 
 import store
 import publishing
+import hashtags as tags_mod
 
 LANE = "clips"
 
 
-def caption_for(cand):
-    """The text posted alongside the video.
+def caption_body(cand):
+    """The prose half of the caption, before any hashtags.
 
     A hand-written caption wins; otherwise the publish title, with the on-screen
     hook appended when it says something the title does not. The hook is the line
@@ -33,6 +34,57 @@ def caption_for(cand):
     if hook and hook.lower() not in title.lower():
         return f"{hook}\n\n{title}" if title else hook
     return title
+
+
+def captions_for(cand, settings=None):
+    """{platform: final caption} — body, this clip's tags, then the platform's.
+
+    Composed at post time rather than stored, so editing your default tags in the
+    Publishing tab changes every future post without rewriting anything.
+    """
+    st = settings or publishing.get_settings()
+    body = caption_body(cand)
+    if not (st.get("hashtags") or {}).get("enabled", True):
+        return {p: body for p in publishing.PLATFORMS}
+    content = list(cand.hashtags or [])
+    return {p: tags_mod.compose(body, content, p, st) for p in publishing.PLATFORMS}
+
+
+def caption_for(cand, platform="youtube", settings=None):
+    """One platform's finished caption."""
+    return captions_for(cand, settings).get(platform, caption_body(cand))
+
+
+def captions_for_id(candidate_id, settings=None):
+    """{platform: caption} for a stored candidate — what would actually be posted."""
+    with store.session() as s:
+        cand = s.get(store.ClipCandidate, candidate_id)
+        if not cand:
+            raise ValueError(f"candidate #{candidate_id} not found")
+        return captions_for(cand, settings)
+
+
+def generate_hashtags(candidate_id, count=None, model=None, log=print):
+    """Write this clip's content tags from what it is about, and store them.
+
+    Only the content tags are generated. The platform tags are appended from
+    settings at post time, so a model is never asked to rediscover "#shorts".
+    """
+    st = publishing.get_settings()
+    n = count or (st.get("hashtags") or {}).get("count") or tags_mod.DEFAULT_COUNT
+    with store.session() as s:
+        cand = s.get(store.ClipCandidate, candidate_id)
+        if not cand:
+            raise ValueError(f"candidate #{candidate_id} not found")
+        title, hook, quote = cand.title or "", cand.hook or "", cand.quote or ""
+    log(f"writing hashtags for #{candidate_id} …")
+    tags = tags_mod.generate(title=title, hook=hook, quote=quote, count=n,
+                             model=model, log=log)
+    with store.session() as s:
+        s.get(store.ClipCandidate, candidate_id).hashtags = tags
+        s.commit()
+    return {"candidate_id": candidate_id, "hashtags": tags,
+            "captions": captions_for_id(candidate_id, st)}
 
 
 def _render_filename(cand):
@@ -75,14 +127,13 @@ def publish_candidate(candidate_id, due=None, log=print):
         if not filename:
             raise ValueError(f"candidate #{candidate_id} has no render")
         title = (cand.title or "").strip() or f"Clip #{candidate_id}"
-        text = caption_for(cand)
+        texts = captions_for(cand)
 
     if candidate_id in scheduled_ref_ids():
         raise ValueError(f"candidate #{candidate_id} is already in the queue")
 
     res = publishing.queue(LANE, candidate_id, job_id_for(candidate_id), filename,
-                           title, text_by_service={p: text for p in publishing.PLATFORMS},
-                           due=due, log=log)
+                           title, text_by_service=texts, due=due, log=log)
     if any(r.get("ok") for r in res.get("results", [])):
         with store.session() as s:
             cand = s.get(store.ClipCandidate, candidate_id)

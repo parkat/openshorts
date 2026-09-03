@@ -49,6 +49,7 @@ class SettingsPatch(BaseModel):
     scheduling: str | None = None
     channels: dict | None = None
     lanes: dict | None = None
+    hashtags: dict | None = None
 
 
 @router.put("/settings")

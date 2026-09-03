@@ -29,6 +29,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 import store
+import hashtags as hashtags_mod
 from explainer.brand import BRAND
 
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://backend:8000").rstrip("/")
@@ -60,6 +61,15 @@ def defaults():
             # hand-queued — you decide which of the batch is worth a slot.
             "explainer": {"enabled": True, "auto": True, "per_day": 1},
             "clips": {"enabled": True, "auto": False, "per_day": 2},
+        },
+        # Always-on tags appended to every post, per platform — the ones that
+        # route a video into a surface rather than describe it. `count` is how
+        # many CONTENT tags to ask the model for. See hashtags.py.
+        "hashtags": {
+            "enabled": True,
+            "count": hashtags_mod.DEFAULT_COUNT,
+            "defaults": {k: list(v) for k, v in
+                         hashtags_mod.DEFAULT_PLATFORM_TAGS.items()},
         },
     }
 
@@ -125,6 +135,15 @@ def validate(s):
     s["lanes"] = lanes
     s["channels"] = {k: str(v) for k, v in (s.get("channels") or {}).items()
                      if k in PLATFORMS}
+
+    tags = dict(s.get("hashtags") or {})
+    tags["enabled"] = bool(tags.get("enabled", True))
+    tags["count"] = max(0, min(int(tags.get("count", hashtags_mod.DEFAULT_COUNT)), 30))
+    # Normalised on save so '#FYP', 'fyp' and ' #fyp ' cannot become three tags.
+    tags["defaults"] = {
+        p: hashtags_mod.dedupe((tags.get("defaults") or {}).get(p) or [])
+        for p in PLATFORMS}
+    s["hashtags"] = tags
     return s
 
 

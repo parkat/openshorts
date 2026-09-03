@@ -212,6 +212,11 @@ class ClipCandidate(Base):
     # resolved at post time rather than copied in at cut time, so re-titling a
     # candidate you never hand-wrote a caption for still changes what goes out.
     caption = Column(Text, default="")
+    # Content hashtags for THIS clip, generated once and then yours to edit. The
+    # always-on platform tags (#shorts / #fyp / #reels) are NOT stored here —
+    # they come from the publishing settings at post time, so changing them
+    # re-composes every future post without rewriting a single row.
+    hashtags = Column(JSON, default=list)
     status = Column(String, default="candidate")  # candidate|cut|rendered|approved|rejected|scheduled
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)

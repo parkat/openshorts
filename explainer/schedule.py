@@ -41,23 +41,32 @@ def _credits(script):
     return " · ".join(out)
 
 
-def build_descriptions(script, footage_credit=None):
+def build_descriptions(script, footage_credit=None, settings=None):
     """Per-platform caption text (from the script's captions) + a credits line.
 
     Falls back to the title when a platform caption is missing so we never post
     an empty description. `footage_credit` (e.g. "Pixabay") is appended per that
-    provider's attribution request."""
+    provider's attribution request.
+
+    The platform's always-on tags (#shorts / #fyp / #reels) are appended last from
+    the publishing settings, the same ones the clips lane uses — the script author
+    writes tags about the subject, and the routing tags are not its job."""
+    import hashtags as tags_mod
     caps = script.get("captions") or {}
     title = script.get("title") or ""
     credits = _credits(script)
     parts = ([f"Credits: {credits}"] if credits else []) + (
         [f"Footage: {footage_credit}"] if footage_credit else [])
+    st = settings if settings is not None else publishing.get_settings()
+    tag_cfg = (st.get("hashtags") or {}) if st else {}
     out = {}
     for p in PLATFORMS:
         text = (caps.get(p) or title).strip()
         if parts:
             text = (text + "\n\n" + "  ·  ".join(parts)).strip()
-        out[p] = text
+        # compose() skips any tag the caption already contains, so a script that
+        # wrote "#shorts" itself does not get it twice.
+        out[p] = tags_mod.compose(text, [], p, st) if tag_cfg.get("enabled", True) else text
     return out
 
 

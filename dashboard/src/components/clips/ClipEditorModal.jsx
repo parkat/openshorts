@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   X, Type, Sparkles, Loader2, RotateCcw, Check, AlertTriangle, History, Send,
+  Hash, Eye,
 } from 'lucide-react';
 import SubtitleModal from '../SubtitleModal';
 import HookModal from '../HookModal';
@@ -25,11 +26,19 @@ export default function ClipEditorModal({ candidate, onClose, onChanged }) {
   const [pane, setPane] = useState(null);       // 'subtitles' | 'hook'
   const [caption, setCaption] = useState(candidate.caption || '');
   const [title, setTitle] = useState(candidate.title || '');
+  const [tags, setTags] = useState((candidate.hashtags || []).join(' '));
   const [savedCopy, setSavedCopy] = useState(true);
+  const [captions, setCaptions] = useState(null);   // per-platform preview
+  const [showPreview, setShowPreview] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      setState(await clipsApi.openEditor(candidate.id));
+      const [ed, caps] = await Promise.all([
+        clipsApi.openEditor(candidate.id),
+        clipsApi.captions(candidate.id).catch(() => null),
+      ]);
+      setState(ed);
+      if (caps) setCaptions(caps.captions);
       setError(null);
     } catch (e) {
       setError(e.message);
@@ -101,9 +110,25 @@ export default function ClipEditorModal({ candidate, onClose, onChanged }) {
     text: h.text, position: h.position, size: h.size,
   }));
 
+  // Tags are typed as free text so you can paste a block; they are normalised
+  // server-side on save (case, punctuation, duplicates) rather than fought with
+  // in an input.
+  const parseTags = (s) => (s.match(/#?[A-Za-z0-9_]+/g) || [])
+    .map((t) => (t.startsWith('#') ? t : `#${t}`));
+
   const saveCopy = () => run('copy', async () => {
-    await clipsApi.update(candidate.id, { title, caption });
+    await clipsApi.update(candidate.id, {
+      title, caption, hashtags: parseTags(tags),
+    });
     setSavedCopy(true);
+  });
+
+  const writeTags = () => run('tags', async () => {
+    const res = await clipsApi.hashtags(candidate.id);
+    setTags((res.hashtags || []).join(' '));
+    if (res.captions) setCaptions(res.captions);
+    setSavedCopy(true);
+    if (!res.hashtags?.length) throw new Error('the model returned no tags — try again');
   });
 
   const rerenderClean = () => run('rerender', async () => {
@@ -232,7 +257,40 @@ export default function ClipEditorModal({ candidate, onClose, onChanged }) {
                     : 'Leave empty to post the title'}
                   className="input-field text-sm resize-y"
                 />
-                <div className="flex items-center gap-3 mt-2">
+                {/* Hashtags. Only the CONTENT tags live here — #shorts / #fyp /
+                    #reels are appended per platform from Publishing settings, so
+                    they are not worth a slot in this box or a model call. */}
+                <div className="mt-3">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="flex items-center gap-1.5 text-xs text-zinc-500">
+                      <Hash size={12} /> Hashtags
+                    </label>
+                    <button
+                      onClick={writeTags}
+                      disabled={!!busy}
+                      className="flex items-center gap-1.5 text-[11px] text-cyan-300 hover:text-cyan-200 disabled:opacity-40 transition-colors"
+                      title="read the clip and write tags for it"
+                    >
+                      {busy === 'tags'
+                        ? <Loader2 size={11} className="animate-spin" />
+                        : <Sparkles size={11} />}
+                      {tags ? 'Regenerate' : 'Generate'}
+                    </button>
+                  </div>
+                  <textarea
+                    value={tags}
+                    onChange={(e) => { setTags(e.target.value); setSavedCopy(false); }}
+                    rows={2}
+                    placeholder="#dashcam #policechase — or generate them"
+                    className="input-field text-sm resize-y font-mono"
+                  />
+                  <p className="text-[11px] text-zinc-600 mt-1.5 leading-relaxed">
+                    About this clip only. Each platform&apos;s own tags are added on
+                    top when it posts — set those once in Publishing.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-3 mt-3">
                   <button
                     onClick={saveCopy}
                     disabled={!!busy || savedCopy}
@@ -254,7 +312,36 @@ export default function ClipEditorModal({ candidate, onClose, onChanged }) {
                       : <Send size={13} />}
                     Queue to Buffer
                   </button>
+                  <button
+                    onClick={() => setShowPreview((v) => !v)}
+                    className="flex items-center gap-1.5 text-[11px] text-zinc-500 hover:text-white ml-auto transition-colors"
+                  >
+                    <Eye size={12} /> {showPreview ? 'Hide' : 'Preview'} per platform
+                  </button>
                 </div>
+
+                {/* What each platform actually receives. Worth showing because the
+                    three captions differ only in their trailing tags, and that
+                    difference is invisible until you look at them side by side. */}
+                {showPreview && captions && (
+                  <div className="mt-3 space-y-2">
+                    {Object.entries(captions).map(([platform, text]) => (
+                      <div key={platform} className="rounded-lg bg-black/30 border border-white/5 p-3">
+                        <p className="text-[10px] uppercase tracking-wider text-zinc-600 mb-1.5">
+                          {platform}
+                        </p>
+                        <p className="text-[11px] text-zinc-300 whitespace-pre-wrap leading-relaxed">
+                          {text || '(empty)'}
+                        </p>
+                      </div>
+                    ))}
+                    {!savedCopy && (
+                      <p className="text-[11px] text-amber-300/80">
+                        Showing the saved version — save to see your edits here.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Version history */}

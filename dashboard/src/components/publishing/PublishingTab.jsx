@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Send, RotateCcw, AlertTriangle, CheckCircle2, Pause, Play, X, Trash2, Plus,
-  Calendar, Clock, Loader2, Radio, KeyRound,
+  Calendar, Clock, Loader2, Radio, KeyRound, Hash,
 } from 'lucide-react';
 import {
   publishingApi, PLATFORM_LABEL, LANE_LABEL, LANE_TINT, STATUS_TINT,
@@ -414,6 +414,78 @@ export default function PublishingTab() {
                 work without you. Clips ships hand-queued: a batch of ten from one
                 source is meant to be released deliberately, not emptied into the
                 calendar the moment it renders.
+              </p>
+            </div>
+
+            {/* Hashtags. Only the always-on, per-platform tags live here — the
+                ones that route a video into a surface and never change. Tags
+                about a particular clip are written per clip, in its editor. */}
+            <div className="mt-6 pt-5 border-t border-white/5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Hash size={13} /> Default tags per platform
+                </h3>
+                <button
+                  onClick={() => set({
+                    hashtags: { ...draft.hashtags, enabled: !draft.hashtags?.enabled },
+                  })}
+                  className={`text-xs px-2.5 py-1 rounded-lg transition-colors ${
+                    draft.hashtags?.enabled
+                      ? 'bg-emerald-500/10 text-emerald-300'
+                      : 'bg-white/5 text-zinc-500'
+                  }`}
+                >
+                  {draft.hashtags?.enabled ? 'on' : 'off'}
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {Object.entries(PLATFORM_LABEL).map(([id, label]) => (
+                  <div key={id} className="flex flex-wrap items-center gap-3">
+                    <span className="text-xs text-zinc-500 w-20 shrink-0">{label}</span>
+                    <input
+                      value={(draft.hashtags?.defaults?.[id] || []).join(' ')}
+                      onChange={(e) => set({
+                        hashtags: {
+                          ...draft.hashtags,
+                          defaults: {
+                            ...draft.hashtags?.defaults,
+                            [id]: (e.target.value.match(/#?[A-Za-z0-9_]+/g) || [])
+                              .map((t) => (t.startsWith('#') ? t : `#${t}`)),
+                          },
+                        },
+                      })}
+                      disabled={!draft.hashtags?.enabled}
+                      placeholder="none"
+                      className="input-field py-1.5 text-sm font-mono flex-1 min-w-[200px] disabled:opacity-40"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <label className="flex items-center gap-2 text-xs text-zinc-500 mt-3">
+                Generate
+                <input
+                  type="number"
+                  min={0}
+                  max={30}
+                  value={draft.hashtags?.count ?? 10}
+                  onChange={(e) => set({
+                    hashtags: { ...draft.hashtags, count: Number(e.target.value) },
+                  })}
+                  disabled={!draft.hashtags?.enabled}
+                  className="input-field py-1 text-sm w-16 disabled:opacity-40"
+                />
+                content tags per clip
+              </label>
+
+              <p className="text-[11px] text-zinc-600 mt-3 leading-relaxed">
+                These go on <strong>every</strong> post to that platform — the tags
+                that decide which surface a video is eligible for, not what it is
+                about. Tags describing a particular clip are written in its editor
+                and appear before these. Duplicates are dropped, so a clip that
+                already says <span className="font-mono">#shorts</span> will not say
+                it twice.
               </p>
             </div>
 

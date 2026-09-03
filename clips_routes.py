@@ -254,6 +254,8 @@ class CandidatePatch(BaseModel):
     mood: str | None = None
     # Word-level [{text,startMs,endMs}] — what the editor's text pane produces.
     captions: list[dict] | None = None
+    # Content hashtags for this clip. Platform tags are settings, not per-clip.
+    hashtags: list[str] | None = None
 
 
 @router.patch("/candidates/{candidate_id}")
@@ -344,3 +346,31 @@ def publishable():
     for r in rows:
         r["video_url"] = _media_url(r.get("render_path"))
     return {"candidates": rows}
+
+
+# --- hashtags ----------------------------------------------------------------
+
+class HashtagBody(BaseModel):
+    count: int = 0
+    model: str = ""
+
+
+@router.post("/candidates/{candidate_id}/hashtags")
+def make_hashtags(candidate_id: int, body: HashtagBody):
+    """Generate this clip's content tags. One cheap model call, so synchronous."""
+    from clips import publish
+    try:
+        return publish.generate_hashtags(candidate_id, count=body.count or None,
+                                         model=body.model or None)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/candidates/{candidate_id}/captions")
+def preview_captions(candidate_id: int):
+    """Exactly what each platform would receive, composed from the current state."""
+    from clips import publish
+    try:
+        return {"captions": publish.captions_for_id(candidate_id)}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))

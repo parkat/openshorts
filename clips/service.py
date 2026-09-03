@@ -336,7 +336,8 @@ def set_status(candidate_id, status, log=print):
     return {"candidate_id": candidate_id, "status": status}
 
 
-EDITABLE_FIELDS = ("title", "hook", "caption", "mood", "captions")
+EDITABLE_FIELDS = ("title", "hook", "caption", "mood", "captions",
+                   "hashtags")
 
 
 def update_candidate(candidate_id, log=print, **fields):
@@ -349,6 +350,12 @@ def update_candidate(candidate_id, log=print, **fields):
     """
     changed = {k: v for k, v in fields.items()
                if k in EDITABLE_FIELDS and v is not None}
+    if "hashtags" in changed:
+        # Normalise on save, not on read: what the editor shows back should be
+        # exactly what will be posted, so '#FYP' and 'fyp' cannot look like two
+        # tags in the box and one in the caption.
+        import hashtags as tags_mod
+        changed["hashtags"] = tags_mod.dedupe(changed["hashtags"])
     if not changed:
         return candidate_detail(candidate_id)
     with store.session() as s:
@@ -372,7 +379,7 @@ def candidate_detail(candidate_id):
             "start_s": c.start_s, "end_s": c.end_s,
             "seconds": round(c.end_s - c.start_s, 1),
             "title": c.title, "hook": c.hook, "quote": c.quote,
-            "caption": c.caption or "",
+            "caption": c.caption or "", "hashtags": list(c.hashtags or []),
             "reason": c.reason, "score": c.score, "mood": c.mood,
             "payoff_s": c.payoff_s or 0.0, "edit": c.edit or "linear",
             "kind": c.kind or "speech",
@@ -443,6 +450,7 @@ def list_candidates(source_id=None, status=""):
                  "reason": r.reason, "quote": r.quote,
                  "payoff_s": r.payoff_s or 0.0, "edit": r.edit or "linear",
                  "kind": r.kind or "speech", "caption": r.caption or "",
+                 "hashtags": list(r.hashtags or []),
                  # The row and the file can disagree — a render can be removed
                  # from under a "rendered" status. Report it rather than handing
                  # the dashboard a video URL that 404s.

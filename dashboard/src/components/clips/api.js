@@ -55,6 +55,9 @@ export const clipsApi = {
   openEditor: (id) => postJson(`/candidates/${id}/editor`, {}),
   editorState: (id) => fetch(getApiUrl(`${BASE}/candidates/${id}/editor`)).then(jsonOrThrow),
   adopt: (id, filename) => postJson(`/candidates/${id}/adopt`, { filename }),
+  // hashtags — content tags for this clip; the platform tags live in settings
+  hashtags: (id, opts = {}) => postJson(`/candidates/${id}/hashtags`, opts),
+  captions: (id) => fetch(getApiUrl(`${BASE}/candidates/${id}/captions`)).then(jsonOrThrow),
   // publishing
   publish: (id, dueAt) => postJson(`/candidates/${id}/publish`, { due_at: dueAt || null }),
 };
