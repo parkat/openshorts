@@ -1,9 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { X, Type, Loader2, Save, Trash2, Bookmark } from 'lucide-react';
 import { getApiUrl } from '../config';
-import RemotionPreview from './RemotionPreview';
 import { buildSubtitleConfig, positionZone, ffMarginV } from '../lib/subtitleConfig';
 import { listPresets, savePreset, deletePreset } from '../lib/presetsApi';
+
+// Remotion's <Player> is ~184KB — a quarter of the JS bundle — and is only ever
+// seen inside this modal. Loading it on demand keeps it out of the initial parse
+// on every page view; the modal itself opens instantly and the preview fades in.
+const RemotionPreview = React.lazy(() => import('./RemotionPreview'));
 
 const FONT_OPTIONS = [
     { value: 'Verdana', label: 'Verdana' },
@@ -195,12 +199,14 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
                             <span className="text-sm">Loading preview...</span>
                         </div>
                     ) : useRemotionPreview ? (
-                        <RemotionPreview
-                            videoUrl={videoUrl}
-                            durationInSeconds={durationSec}
-                            subtitles={subtitleConfig}
-                            hook={existingHook || null}
-                        />
+                        <Suspense fallback={<div className="flex items-center gap-2 text-zinc-500 text-sm"><Loader2 size={16} className="animate-spin" /> Loading preview…</div>}>
+                            <RemotionPreview
+                                videoUrl={videoUrl}
+                                durationInSeconds={durationSec}
+                                subtitles={subtitleConfig}
+                                hook={existingHook || null}
+                            />
+                        </Suspense>
                     ) : (
                         <>
                             <video src={videoUrl} className="w-full h-full object-contain opacity-50" muted playsInline />

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   Scissors, Clapperboard, Check, X, Trash2, ChevronDown, ChevronUp, Download, Repeat,
-  Wand2, Send, Loader2,
+  Wand2, Send, Loader2, Play,
 } from 'lucide-react';
 import { clipsApi, STATUS_TINT, fmtClock, getApiUrl } from './api';
 
@@ -10,6 +10,7 @@ import { clipsApi, STATUS_TINT, fmtClock, getApiUrl } from './api';
 // the render inline once there is one.
 export default function CandidateCard({ candidate: c, mood, edit, busy, onRun, onChanged, onEdit }) {
   const [open, setOpen] = useState(false);
+  const [playing, setPlaying] = useState(false);
   const [queueing, setQueueing] = useState(false);
   const [queueError, setQueueError] = useState(null);
   const claimsRender = ['rendered', 'approved', 'rejected', 'scheduled'].includes(c.status);
@@ -82,13 +83,36 @@ export default function CandidateCard({ candidate: c, mood, edit, busy, onRun, o
         </p>
       )}
 
+      {/* A poster until you ask for the video.
+          One <video> per card meant twenty media elements on a review page —
+          twenty decoders, connections and sets of GPU buffers, for previews
+          nobody had pressed play on. The thumbnail is an <img>; the player is
+          mounted on click, and only for the card you clicked. */}
       {rendered && c.video_url && (
-        <video
-          src={getApiUrl(c.video_url)}
-          controls
-          preload="metadata"
-          className="w-full max-w-[220px] rounded-lg mt-3 bg-black"
-        />
+        playing ? (
+          <video
+            src={getApiUrl(c.video_url)}
+            controls
+            autoPlay
+            className="w-full max-w-[220px] rounded-lg mt-3 bg-black"
+          />
+        ) : (
+          <button
+            onClick={() => setPlaying(true)}
+            className="relative block w-full max-w-[220px] mt-3 rounded-lg overflow-hidden bg-black group"
+            title="play"
+          >
+            <img
+              src={getApiUrl(`/api/clips/candidates/${c.id}/thumb`)}
+              alt=""
+              loading="lazy"
+              className="w-full aspect-[9/16] object-cover"
+            />
+            <span className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/40 transition-colors">
+              <Play size={26} className="text-white/90 drop-shadow" />
+            </span>
+          </button>
+        )
       )}
 
       <div className="flex flex-wrap items-center gap-2 mt-3">

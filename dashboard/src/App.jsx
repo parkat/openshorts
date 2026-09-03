@@ -1,20 +1,33 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { Upload, FileVideo, Sparkles, Youtube, Instagram, Share2, LogOut, ChevronDown, Check, Activity, LayoutDashboard, Settings, PlusCircle, History, Menu, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, FlaskConical, Scissors, Send } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import ResultCard from './components/ResultCard';
 import ProcessingAnimation from './components/ProcessingAnimation';
 // import Gallery from './components/Gallery';
-import ThumbnailStudio from './components/ThumbnailStudio';
-import ClipsTab from './components/clips/ClipsTab';
-import PublishingTab from './components/publishing/PublishingTab';
-import UGCGallery from './components/UGCGallery';
-import ExplainerTab from './components/explainer/ExplainerTab';
+
+// Split per tab. Each of these is a whole page you may never open in a session,
+// and every one of them was being parsed and evaluated before the first paint of
+// whichever tab you actually wanted. They load on first visit and stay loaded.
+const ThumbnailStudio = lazy(() => import('./components/ThumbnailStudio'));
+const ClipsTab = lazy(() => import('./components/clips/ClipsTab'));
+const PublishingTab = lazy(() => import('./components/publishing/PublishingTab'));
+const UGCGallery = lazy(() => import('./components/UGCGallery'));
+const ExplainerTab = lazy(() => import('./components/explainer/ExplainerTab'));
 import ScheduleWeekModal from './components/ScheduleWeekModal';
 import BatchBar from './components/BatchBar';
 import { getApiUrl } from './config';
 import { listPresets } from './lib/presetsApi';
 import { clipDownloadName } from './lib/downloadName';
+
+// Shown while a tab's chunk is fetched — a beat on first visit, never again.
+function TabLoading() {
+  return (
+    <div className="h-full flex items-center justify-center text-zinc-600 text-sm gap-2">
+      <Activity size={15} className="animate-pulse" /> Loading…
+    </div>
+  );
+}
 
 // Enhanced "Encryption" using XOR + Base64 with a Salt
 // This is better than plain Base64 but still client-side.
@@ -891,17 +904,17 @@ function App() {
               the AI Shorts (UGC) tab, which is no longer used. SaaShortsTab.jsx and
               its /api/saasshorts routes are still in the tree, just unmounted. */}
           {activeTab === 'clips' && (
-            <ClipsTab />
+            <Suspense fallback={<TabLoading />}><ClipsTab /></Suspense>
           )}
 
           {/* View: Publishing — the shared Buffer calendar for every lane */}
           {activeTab === 'publishing' && (
-            <PublishingTab />
+            <Suspense fallback={<TabLoading />}><PublishingTab /></Suspense>
           )}
 
           {/* View: Explainer lane */}
           {activeTab === 'explainer' && (
-            <ExplainerTab />
+            <Suspense fallback={<TabLoading />}><ExplainerTab /></Suspense>
           )}
 
           {/* View: AI Agent */}
@@ -1022,12 +1035,14 @@ function App() {
 
           {/* View: UGC Gallery */}
           {activeTab === 'ugc-gallery' && (
-            <UGCGallery />
+            <Suspense fallback={<TabLoading />}><UGCGallery /></Suspense>
           )}
 
           {/* View: Thumbnails */}
           {activeTab === 'thumbnails' && (
-            <ThumbnailStudio geminiApiKey={apiKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} />
+            <Suspense fallback={<TabLoading />}>
+              <ThumbnailStudio geminiApiKey={apiKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} />
+            </Suspense>
           )}
 
           {/* View: Gallery */}

@@ -21,6 +21,7 @@ import contextlib
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -374,3 +375,16 @@ def preview_captions(candidate_id: int):
         return {"captions": publish.captions_for_id(candidate_id)}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/candidates/{candidate_id}/thumb")
+def candidate_thumb(candidate_id: int):
+    """A poster frame for the review list — see clips/editor.thumbnail()."""
+    from clips import editor
+    path = editor.thumbnail(candidate_id)
+    if not path:
+        raise HTTPException(status_code=404, detail="no render to thumbnail")
+    # Cached hard: the URL carries the render's filename, so an edit produces a
+    # different URL rather than needing this to expire.
+    return FileResponse(path, media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=31536000, immutable"})

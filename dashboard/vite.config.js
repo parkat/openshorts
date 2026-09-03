@@ -29,4 +29,17 @@ export default defineConfig({
   preview: {
     proxy,
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/remotion') || id.includes('node_modules/@remotion')) return 'remotion';
+          if (id.includes('node_modules/react')) return 'react';
+          if (id.includes('node_modules/lucide-react')) return 'icons';
+          if (id.includes('node_modules/zod')) return 'zod';
+          if (id.includes('node_modules')) return 'vendor';
+        },
+      },
+    },
+  },
 })

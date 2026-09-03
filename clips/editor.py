@@ -20,6 +20,7 @@ window was taken from.
 import os
 import json
 import glob
+import subprocess
 
 import store
 from clips.render import job_id_for, cand_dir
@@ -148,6 +149,43 @@ def adopt(candidate_id, filename):
     write_shim(candidate_id, filename=name)
     return {"candidate_id": candidate_id, "filename": name,
             "video_url": f"/videos/{job_id_for(candidate_id)}/{name}"}
+
+
+def thumbnail(candidate_id, at_s=1.0, width=320):
+    """A JPEG still of the current render, built once and cached beside it.
+
+    The review list showed one <video> per candidate. Twenty of those on a page
+    is twenty media elements, each with a decoder, a connection and GPU buffers,
+    all to display a poster frame nobody had pressed play on. An <img> costs
+    almost nothing, so the list uses this and only mounts a real player when you
+    click one.
+
+    Rebuilt when the render is newer than the thumb, so an edit is reflected
+    rather than showing the pre-edit frame forever. Returns a path, or None when
+    there is nothing to grab a frame from.
+    """
+    name = current_file(candidate_id)
+    if not name:
+        return None
+    d = cand_dir(candidate_id)
+    video = os.path.join(d, name)
+    if not os.path.isfile(video):
+        return None
+    thumb = os.path.join(d, "thumb.jpg")
+    if os.path.isfile(thumb) and os.path.getmtime(thumb) >= os.path.getmtime(video):
+        return thumb
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-ss", f"{max(0.0, float(at_s)):.2f}",
+         "-i", video, "-frames:v", "1", "-vf", f"scale={int(width)}:-2",
+         "-q:v", "6", thumb],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if r.returncode != 0 or not os.path.isfile(thumb):
+        # A clip shorter than `at_s` has no frame there — fall back to the first.
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-i", video, "-frames:v", "1",
+             "-vf", f"scale={int(width)}:-2", "-q:v", "6", thumb],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return thumb if os.path.isfile(thumb) else None
 
 
 # Pipeline working files, not versions of the Short. `clip.mp4` is the raw 16:9
