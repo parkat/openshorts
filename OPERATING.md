@@ -145,8 +145,16 @@ ssh gpu-pc 'curl -s localhost:8000/api/publishing/status | python3 -m json.tool'
 - **Clips is hand-queued by default** (`lanes.clips.auto = false`); explainer
   keeps its 1/day auto-drip. The worker ticks both every `SCHEDULER_INTERVAL`.
 - **A dead Buffer token is the usual cause** of anything here failing, and it
-  fails silently everywhere else — the tab's first panel says so in words.
-  `BUFFER` lives in the box's `.env`; restart the backend after changing it.
+  fails silently everywhere else — the tab's first panel says so in words. Paste
+  a new one into that panel: it is checked against Buffer before it is stored,
+  lands server-side (where the worker can reach it, unlike the Settings tab's
+  browser-held key), and takes effect with no restart. `BUFFER` in `.env` remains
+  the fallback.
+- **Hashtags come in two kinds** (`hashtags.py`). The always-on per-platform tags
+  (`#shorts` / `#fyp` / `#reels`) are settings, appended at post time to both
+  lanes — change them once and every future post re-composes. Tags describing a
+  particular clip are generated per clip in its editor and stored on the row.
+  Content is trimmed to fit the per-platform cap; the routing tags never are.
 
 ### Clip editor (clips lane)
 
