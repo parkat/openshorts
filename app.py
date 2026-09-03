@@ -1,5 +1,8 @@
 import os
+import io
+import re
 import uuid
+import zipfile
 import subprocess
 import threading
 import json
@@ -7,15 +10,17 @@ import shutil
 import glob
 import time
 import asyncio
+import functools
 from dotenv import load_dotenv
 from typing import Dict, Optional, List
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from pydantic import BaseModel
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
+import buffer_client
 
 load_dotenv()
 
@@ -29,7 +34,10 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # Default to 1 if not set, but user can set higher for powerful servers
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "5"))
 MAX_FILE_SIZE_MB = 2048  # 2GB limit
-JOB_RETENTION_SECONDS = 3600  # 1 hour retention
+# How long finished job folders (clips + metadata) survive before the cleanup task
+# purges them. 1 hour was far too aggressive for a local workflow where you generate
+# clips and then iterate on subtitles/hooks/crops. Default 24h; override via env.
+JOB_RETENTION_SECONDS = int(os.environ.get("JOB_RETENTION_SECONDS", str(24 * 3600)))
 DISABLE_YOUTUBE_URL = os.environ.get("DISABLE_YOUTUBE_URL", "false").lower() in ("1", "true", "yes")
 
 # Application State
@@ -81,6 +89,63 @@ def _relocate_root_job_artifacts(job_id: str, job_output_dir: str) -> bool:
     except Exception:
         return False
 
+ARCHIVE_DIR = os.environ.get("ARCHIVE_DIR", "/app/archive")
+
+
+def archive_job_clips(job_id, job_path):
+    """Copy a job's final clips (in their current edited state) + metadata to the
+    persistent host archive before the folder is purged. Returns count saved.
+    Uses copyfile (no chmod) to avoid EPERM on Windows/WSL bind mounts."""
+    metas = glob.glob(os.path.join(job_path, "*_metadata.json"))
+    if not metas:
+        return 0
+    with open(metas[0], 'r') as f:
+        data = json.load(f)
+    base_name = os.path.basename(metas[0]).replace('_metadata.json', '')
+    dest = os.path.join(ARCHIVE_DIR, base_name)
+    os.makedirs(dest, exist_ok=True)
+
+    clips = data.get('shorts', [])
+    saved = 0
+    for i, clip in enumerate(clips):
+        # video_url reflects the clip's CURRENT state (edited hook/subtitle/recrop),
+        # or is unset for un-edited clips -> fall back to the reframe output name.
+        url = clip.get('video_url')
+        fname = os.path.basename(url) if url else f"{base_name}_clip_{i+1}.mp4"
+        src = os.path.join(job_path, fname)
+        if not os.path.exists(src):
+            continue
+        title = clip.get('video_title_for_youtube_short') or f"clip_{i+1}"
+        safe = "".join(c for c in title if c.isalnum() or c in " -_").strip()[:60] or f"clip_{i+1}"
+        shutil.copyfile(src, os.path.join(dest, f"{i+1:02d}_{safe}.mp4"))
+        saved += 1
+    try:
+        shutil.copyfile(metas[0], os.path.join(dest, "metadata.json"))
+    except Exception:
+        pass
+    return saved
+
+
+# Directories under OUTPUT_DIR that the 24h purge must never touch.
+#
+# The purge was written for the original lane, whose jobs live in memory and are
+# genuinely disposable after a day. The explainer and clips lanes are not: their
+# state is durable in SQLite, a render sits in a review queue until a human looks
+# at it, and once queued into Buffer the file must survive until its slot — which
+# is days out. Purging those left rows saying "rendered" pointing at files that
+# had been deleted, and a scheduled post whose media URL 404s at publish time.
+#
+# Retention for those lanes is a lane decision (delete a source, reject a clip),
+# not a clock.
+DURABLE_PREFIXES = ("explainer-", "clips-")
+KEEP_DIRS = {"stock", "thumbnails", "archive"}
+
+
+def _is_purgeable(name: str) -> bool:
+    """True only for original-lane job dirs — see DURABLE_PREFIXES."""
+    return name not in KEEP_DIRS and not name.startswith(DURABLE_PREFIXES)
+
+
 async def cleanup_jobs():
     """Background task to remove old jobs and files."""
     import time
@@ -94,8 +159,14 @@ async def cleanup_jobs():
             # Check OUTPUT_DIR
             for job_id in os.listdir(OUTPUT_DIR):
                 job_path = os.path.join(OUTPUT_DIR, job_id)
-                if os.path.isdir(job_path):
+                if os.path.isdir(job_path) and _is_purgeable(job_id):
                     if now - os.path.getmtime(job_path) > JOB_RETENTION_SECONDS:
+                        # Archive clips to the persistent host folder BEFORE purging.
+                        try:
+                            n = archive_job_clips(job_id, job_path)
+                            print(f"📦 Archived {n} clip(s) from {job_id} to {ARCHIVE_DIR}")
+                        except Exception as e:
+                            print(f"⚠️ Archive failed for {job_id}: {e}")
                         print(f"🧹 Purging old job: {job_id}")
                         shutil.rmtree(job_path, ignore_errors=True)
                         if job_id in jobs:
@@ -185,6 +256,264 @@ app.mount("/videos", StaticFiles(directory=OUTPUT_DIR), name="videos")
 THUMBNAILS_DIR = os.path.join(OUTPUT_DIR, "thumbnails")
 os.makedirs(THUMBNAILS_DIR, exist_ok=True)
 app.mount("/thumbnails", StaticFiles(directory=THUMBNAILS_DIR), name="thumbnails")
+
+# Explainer lane — the second "driver" (dashboard) over the shared SQLite store.
+# All /api/explainer/* routes live in explainer_routes.py.
+try:
+    from explainer_routes import router as explainer_router
+    app.include_router(explainer_router)
+except Exception as _exc:  # pragma: no cover — never let it break the whole server
+    print(f"⚠️ explainer routes not mounted: {_exc}")
+
+# Clips lane — source-first clipping of long-form video. Same store, own routes.
+try:
+    from clips_routes import router as clips_router
+    app.include_router(clips_router)
+except Exception as _exc:  # pragma: no cover — never let it break the whole server
+    print(f"⚠️ clips routes not mounted: {_exc}")
+
+# Publishing — the shared Buffer calendar both lanes queue into. Mounted last
+# because it reaches back into both of them to answer "what is ready to go out".
+try:
+    from publishing_routes import router as publishing_router
+    app.include_router(publishing_router)
+except Exception as _exc:  # pragma: no cover — never let it break the whole server
+    print(f"⚠️ publishing routes not mounted: {_exc}")
+
+# ---------------------------------------------------------------------------
+# Edit presets (backend-synced, so they're available on every device) + batch
+# download. Presets live in the project dir (bind-mounted), NOT in OUTPUT_DIR
+# which is periodically purged. A preset is { id, name, kind, settings, updated }.
+# ---------------------------------------------------------------------------
+# Persist under the archive mount (writable by the backend, survives the job-
+# retention purge that clears OUTPUT_DIR). Override with PRESETS_FILE if desired.
+PRESETS_FILE = os.environ.get("PRESETS_FILE", os.path.join("archive", "presets.json"))
+_presets_lock = threading.Lock()
+
+def _load_presets() -> list:
+    try:
+        with open(PRESETS_FILE, "r") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+def _write_presets(items: list):
+    d = os.path.dirname(PRESETS_FILE)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    tmp = PRESETS_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(items, f, indent=2)
+    os.replace(tmp, PRESETS_FILE)
+
+def _safe_arcname(name: str, used: set) -> str:
+    """A filesystem-safe, unique .mp4 name for a file inside the batch zip."""
+    base = re.sub(r'[^\w\-. ]+', '_', name or '').strip() or "clip"
+    if not base.lower().endswith(".mp4"):
+        base += ".mp4"
+    candidate, i = base, 1
+    while candidate in used:
+        candidate = f"{base[:-4]}_{i}.mp4"
+        i += 1
+    used.add(candidate)
+    return candidate
+
+class PresetBody(BaseModel):
+    id: Optional[str] = None
+    name: str
+    kind: str = "subtitle"
+    settings: dict = {}
+
+@app.get("/api/presets")
+async def get_presets():
+    return {"presets": _load_presets()}
+
+@app.post("/api/presets")
+async def save_preset(body: PresetBody):
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Preset name is required")
+    with _presets_lock:
+        items = _load_presets()
+        existing = None
+        if body.id:
+            existing = next((p for p in items if p.get("id") == body.id), None)
+        if existing is None:  # de-dupe by (kind, name) so re-saving overwrites
+            existing = next((p for p in items if p.get("kind") == body.kind and p.get("name") == name), None)
+        if existing is not None:
+            existing.update({"name": name, "kind": body.kind, "settings": body.settings, "updated": time.time()})
+            preset = existing
+        else:
+            preset = {"id": uuid.uuid4().hex[:12], "name": name, "kind": body.kind,
+                      "settings": body.settings, "updated": time.time()}
+            items.append(preset)
+        _write_presets(items)
+    return {"preset": preset}
+
+@app.delete("/api/presets/{preset_id}")
+async def delete_preset(preset_id: str):
+    with _presets_lock:
+        items = _load_presets()
+        kept = [p for p in items if p.get("id") != preset_id]
+        if len(kept) == len(items):
+            raise HTTPException(status_code=404, detail="Preset not found")
+        _write_presets(kept)
+    return {"ok": True}
+
+class BatchDownloadItem(BaseModel):
+    filename: str            # basename of the clip's current file in output/<job_id>/
+    name: Optional[str] = None  # desired name inside the zip (e.g. the clip title)
+
+class BatchDownloadBody(BaseModel):
+    job_id: str
+    items: List[BatchDownloadItem]
+
+@app.post("/api/batch/download")
+async def batch_download(body: BatchDownloadBody):
+    """Zip the selected clips' current files (from output/<job_id>/) and stream it."""
+    out_root = os.path.realpath(OUTPUT_DIR)
+    job_dir = os.path.realpath(os.path.join(OUTPUT_DIR, body.job_id))
+    if not (job_dir == out_root or job_dir.startswith(out_root + os.sep)) or not os.path.isdir(job_dir):
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not body.items:
+        raise HTTPException(status_code=400, detail="No clips selected")
+
+    buf = io.BytesIO()
+    used = set()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
+        for item in body.items:
+            safe = os.path.basename(item.filename)  # block path traversal
+            src = os.path.realpath(os.path.join(job_dir, safe))
+            if not src.startswith(job_dir + os.sep) or not os.path.isfile(src):
+                continue
+            zf.write(src, _safe_arcname(item.name or safe, used))
+    if buf.tell() == 0:
+        raise HTTPException(status_code=404, detail="None of the selected files were found")
+    buf.seek(0)
+    fname = f"openshorts_{body.job_id[:8]}_clips.zip"
+    return StreamingResponse(buf, media_type="application/zip",
+                             headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+# ---------------------------------------------------------------------------
+# Buffer social posting: publicly host the clip via an unguessable token on the
+# no-Access media subdomain (Buffer fetches video by URL), then createPost per
+# channel. Free-tier limits: 100/15min, 250/day — see buffer_client.
+# ---------------------------------------------------------------------------
+MEDIA_TOKENS_FILE = os.environ.get("MEDIA_TOKENS_FILE", os.path.join("archive", "media_tokens.json"))
+MEDIA_BASE_URL = os.environ.get("MEDIA_BASE_URL", "https://media.parkat.us").rstrip("/")
+_media_lock = threading.Lock()
+
+def _load_media_tokens() -> dict:
+    try:
+        with open(MEDIA_TOKENS_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def _write_media_tokens(d: dict):
+    p = os.path.dirname(MEDIA_TOKENS_FILE)
+    if p:
+        os.makedirs(p, exist_ok=True)
+    tmp = MEDIA_TOKENS_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(d, f)
+    os.replace(tmp, MEDIA_TOKENS_FILE)
+
+def _mint_media_token(job_id: str, filename: str) -> str:
+    token = uuid.uuid4().hex
+    with _media_lock:
+        toks = _load_media_tokens()
+        toks[token] = {"job_id": job_id, "filename": os.path.basename(filename)}
+        _write_media_tokens(toks)
+    return token
+
+@app.api_route("/m/{token}", methods=["GET", "HEAD"])
+async def serve_media(token: str):
+    """Public (no-Access) tokenized clip stream — media.parkat.us/m/<token>.
+    HEAD is supported because Buffer probes the URL with HEAD before accepting it."""
+    entry = _load_media_tokens().get(token)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Not found")
+    out_root = os.path.realpath(OUTPUT_DIR)
+    path = os.path.realpath(os.path.join(OUTPUT_DIR, entry["job_id"], entry["filename"]))
+    if not (path.startswith(out_root + os.sep)) or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(path, media_type="video/mp4")
+
+class BufferPostChannel(BaseModel):
+    id: str
+    service: str
+    text: str = ""
+
+class BufferPostBody(BaseModel):
+    job_id: str
+    clip_index: int
+    filename: str            # current file basename in output/<job_id>/
+    title: Optional[str] = None   # used as the YouTube title
+    channels: List[BufferPostChannel]
+    schedule_iso: Optional[str] = None   # ISO8601 -> customScheduled; else addToQueue
+    scheduling: str = "automatic"        # 'automatic' | 'notification'
+
+def _buffer_key(header_key):
+    """Resolve the Buffer token: browser header, then stored, then the .env.
+
+    The stored token (Publishing tab) sits in the middle deliberately. It is the
+    only one the headless worker can use, so it has to outrank the .env — but an
+    explicit header still wins, which is what lets the Publishing tab test a
+    pasted token before committing to it."""
+    key = header_key
+    if not key:
+        try:
+            import publishing
+            key = publishing.buffer_key()
+        except Exception:  # noqa: BLE001 — fall back rather than break posting
+            key = os.environ.get("BUFFER")
+    if not key:
+        raise HTTPException(status_code=400, detail="No Buffer API key (set it in the Publishing tab, or BUFFER in the server .env).")
+    return key
+
+@app.get("/api/buffer/channels")
+async def buffer_channels(api_key: str = Header(None, alias="X-Buffer-Key")):
+    try:
+        return {"channels": buffer_client.list_channels(_buffer_key(api_key))}
+    except buffer_client.BufferError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/buffer/post")
+async def buffer_post(body: BufferPostBody, api_key: str = Header(None, alias="X-Buffer-Key")):
+    api_key = _buffer_key(api_key)
+    safe = os.path.basename(body.filename)
+    out_root = os.path.realpath(OUTPUT_DIR)
+    path = os.path.realpath(os.path.join(OUTPUT_DIR, body.job_id, safe))
+    if not (path.startswith(out_root + os.sep)) or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Clip file not found")
+    if not body.channels:
+        raise HTTPException(status_code=400, detail="No channels selected")
+
+    video_url = f"{MEDIA_BASE_URL}/m/{_mint_media_token(body.job_id, safe)}"
+    results = []
+    loop = asyncio.get_event_loop()
+    for ch in body.channels:
+        try:
+            # MUST run off the event loop. create_video_post blocks on requests(),
+            # and Buffer fetches the /m/<token> URL *from this same server* while
+            # that call is in flight — blocking here deadlocks the two and Buffer
+            # reports "Video could not be read from its URL".
+            post = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    buffer_client.create_video_post,
+                    api_key, ch.id, ch.service, ch.text, video_url,
+                    title=body.title, schedule_iso=body.schedule_iso,
+                    scheduling=body.scheduling,
+                ),
+            )
+            results.append({"service": ch.service, "ok": True,
+                            "post_id": post.get("id"), "status": post.get("status")})
+        except buffer_client.BufferError as e:
+            results.append({"service": ch.service, "ok": False, "error": str(e)})
+    return {"video_url": video_url, "results": results}
 
 class ProcessRequest(BaseModel):
     url: str
@@ -318,13 +647,15 @@ async def process_endpoint(
     request: Request,
     file: Optional[UploadFile] = File(None),
     url: Optional[str] = Form(None),
-    acknowledged: Optional[str] = Form(None)
+    acknowledged: Optional[str] = Form(None),
+    split_parts: Optional[str] = Form(None),
+    part_length: Optional[str] = Form(None),
+    layout: Optional[str] = Form(None)
 ):
     api_key = request.headers.get("X-Gemini-Key")
-    if not api_key:
-        raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
 
     ack_flag = str(acknowledged).lower() in ("1", "true", "yes")
+    split_flag = str(split_parts).lower() in ("1", "true", "yes")
 
     # Handle JSON body manually for URL payload
     content_type = request.headers.get("content-type", "")
@@ -332,6 +663,23 @@ async def process_endpoint(
         body = await request.json()
         url = body.get("url")
         ack_flag = bool(body.get("acknowledged"))
+        split_flag = bool(body.get("split_parts"))
+        part_length = body.get("part_length")
+        layout = body.get("layout")
+
+    # Resolve part length (seconds); default 60, clamp to a sane range
+    try:
+        part_len = int(part_length) if part_length not in (None, "") else 60
+    except (TypeError, ValueError):
+        part_len = 60
+    part_len = max(10, min(part_len, 600))
+
+    # Reframe layout: only 'fit' is meaningful; anything else is the 'auto' default.
+    layout_mode = 'fit' if str(layout).lower() == 'fit' else 'auto'
+
+    # Gemini key required only for viral mode (split mode uses no Gemini call)
+    if not split_flag and not api_key:
+        raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
 
     if not url and not file:
         raise HTTPException(status_code=400, detail="Must provide URL or File")
@@ -363,7 +711,8 @@ async def process_endpoint(
     # Prepare Command
     cmd = ["python", "-u", "main.py"] # -u for unbuffered
     env = os.environ.copy()
-    env["GEMINI_API_KEY"] = api_key # Override with key from request
+    if api_key:
+        env["GEMINI_API_KEY"] = api_key # Override with key from request
 
     if url:
         cmd.extend(["-u", url])
@@ -388,6 +737,12 @@ async def process_endpoint(
 
     cmd.extend(["-o", job_output_dir])
 
+    if split_flag:
+        cmd.extend(["--split-parts", "--part-length", str(part_len)])
+
+    if layout_mode == 'fit':
+        cmd.extend(["--layout", "fit"])
+
     print(f"[attestation] job={job_id} ip={attestation['ip']} source={attestation['source']} ack=true")
 
     # Enqueue Job
@@ -404,12 +759,48 @@ async def process_endpoint(
 
     return {"job_id": job_id, "status": "queued"}
 
+def get_job_or_rehydrate(job_id: str):
+    """Return the in-memory job, or rebuild a minimal completed job from on-disk
+    metadata if it's missing.
+
+    The `jobs` dict is in-memory only, so a server restart (or the 1-hour
+    auto-cleanup) wipes it — which would make Auto Edit / Subtitles / Hooks /
+    Effects fail with "Job not found" even though the clips still exist on disk.
+    This reconstructs `job['result']['clips']` (with video_url) from the saved
+    <job_id>/*_metadata.json so those actions keep working across restarts.
+    Raises 404 only if no metadata exists on disk.
+    """
+    job = jobs.get(job_id)
+    if job is not None:
+        return job
+
+    output_dir = os.path.join(OUTPUT_DIR, job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    target_json = json_files[0]
+    with open(target_json, 'r') as f:
+        data = json.load(f)
+
+    base_name = os.path.basename(target_json).replace('_metadata.json', '')
+    clips = data.get('shorts', [])
+    cost_analysis = data.get('cost_analysis')
+    for i, clip in enumerate(clips):
+        clip_filename = f"{base_name}_clip_{i+1}.mp4"
+        clip['video_url'] = f"/videos/{job_id}/{clip_filename}"
+
+    job = {
+        'status': 'completed',
+        'logs': ['(rehydrated from disk after server restart)'],
+        'result': {'clips': clips, 'cost_analysis': cost_analysis},
+    }
+    jobs[job_id] = job
+    return job
+
 @app.get("/api/status/{job_id}")
 async def get_status(job_id: str):
-    if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    job = jobs[job_id]
+    job = get_job_or_rehydrate(job_id)
     return {
         "status": job['status'],
         "logs": job['logs'],
@@ -421,6 +812,7 @@ from subtitles import generate_srt, burn_subtitles, generate_srt_from_video
 from hooks import add_hook_to_video
 from translate import translate_video, get_supported_languages
 from thumbnail import analyze_video_for_titles, refine_titles, generate_thumbnail, generate_youtube_description
+from clip_chat import chat_about_clip
 
 class EditRequest(BaseModel):
     job_id: str
@@ -439,10 +831,7 @@ async def edit_clip(
     if not final_api_key:
         raise HTTPException(status_code=400, detail="Missing Gemini API Key (Header or Body)")
 
-    if req.job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    job = jobs[req.job_id]
+    job = get_job_or_rehydrate(req.job_id)
     if 'result' not in job or 'clips' not in job['result']:
         raise HTTPException(status_code=400, detail="Job result not available")
         
@@ -478,7 +867,8 @@ async def edit_clip(
             
             # Copy original file to safe path
             # (Copy is safer than rename if something crashes, we keep original)
-            shutil.copy(input_path, safe_input_path)
+            # copyfile (not copy) avoids chmod, which raises EPERM on Windows/WSL bind mounts.
+            shutil.copyfile(input_path, safe_input_path)
             
             try:
                 # 1. Upload (using safe path)
@@ -555,6 +945,7 @@ class SubtitleRequest(BaseModel):
     job_id: str
     clip_index: int
     position: str = "bottom" # top, middle, bottom
+    margin_v: int = 25 # vertical margin in ASS units (fine position within the zone)
     font_size: int = 16
     font_name: str = "Verdana"
     font_color: str = "#FFFFFF"
@@ -568,8 +959,7 @@ class SubtitleRequest(BaseModel):
 @app.get("/api/clip/{job_id}/{clip_index}/transcript")
 async def get_clip_transcript(job_id: str, clip_index: int):
     """Return word-level captions for a specific clip, formatted for Remotion."""
-    if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
+    get_job_or_rehydrate(job_id)
 
     output_dir = os.path.join(OUTPUT_DIR, job_id)
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
@@ -610,6 +1000,75 @@ async def get_clip_transcript(job_id: str, clip_index: int):
         "durationSec": duration_sec,
         "language": transcript.get('language', 'en'),
     }
+
+
+def _build_clip_script(job_id: str, clip_index: int) -> str:
+    """Load a clip's spoken script (the words within its time range) from metadata."""
+    output_dir = os.path.join(OUTPUT_DIR, job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+    with open(json_files[0], 'r') as f:
+        data = json.load(f)
+    transcript = data.get('transcript')
+    clips = data.get('shorts', [])
+    if not transcript or clip_index >= len(clips):
+        raise HTTPException(status_code=404, detail="Clip or transcript not found")
+    clip_data = clips[clip_index]
+    clip_start = clip_data.get('start', 0)
+    clip_end = clip_data.get('end', 0)
+
+    # Prefer word-level text; fall back to segment-level text.
+    words = []
+    for segment in transcript.get('segments', []):
+        for w in segment.get('words', []):
+            if w.get('end', 0) > clip_start and w.get('start', 0) < clip_end:
+                t = (w.get('word') or '').strip()
+                if t:
+                    words.append(t)
+    script = " ".join(words).strip()
+    if not script:
+        parts = []
+        for segment in transcript.get('segments', []):
+            if segment.get('end', 0) > clip_start and segment.get('start', 0) < clip_end:
+                parts.append((segment.get('text') or '').strip())
+        script = " ".join(p for p in parts if p).strip()
+    return script
+
+
+class ClipChatRequest(BaseModel):
+    message: str
+    history: Optional[List[dict]] = None
+
+
+@app.post("/api/clip/{job_id}/{clip_index}/chat")
+async def clip_chat(
+    job_id: str,
+    clip_index: int,
+    req: ClipChatRequest,
+    x_gemini_key: Optional[str] = Header(None, alias="X-Gemini-Key")
+):
+    """Chat with Gemini about a single clip's transcript (titles, descriptions, hashtags...)."""
+    api_key = x_gemini_key or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
+    if not req.message or not req.message.strip():
+        raise HTTPException(status_code=400, detail="Message is required")
+
+    get_job_or_rehydrate(job_id)
+    script = _build_clip_script(job_id, clip_index)
+    if not script:
+        script = "(No transcript text is available for this clip.)"
+
+    try:
+        loop = asyncio.get_event_loop()
+        reply = await loop.run_in_executor(
+            None, chat_about_clip, api_key, script, req.message, req.history
+        )
+        return {"reply": reply, "script": script}
+    except Exception as e:
+        print(f"❌ Clip Chat Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # --- Remotion Render Proxy ---
@@ -655,10 +1114,7 @@ async def generate_effects_config(
     if not final_api_key:
         raise HTTPException(status_code=400, detail="Missing Gemini API Key (Header)")
 
-    if req.job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    job = jobs[req.job_id]
+    job = get_job_or_rehydrate(req.job_id)
     if 'result' not in job or 'clips' not in job['result']:
         raise HTTPException(status_code=400, detail="Job result not available")
 
@@ -681,7 +1137,8 @@ async def generate_effects_config(
             # Create safe ASCII filename to avoid encoding issues
             safe_filename = f"temp_effects_{req.job_id}.mp4"
             safe_input_path = os.path.join(OUTPUT_DIR, req.job_id, safe_filename)
-            shutil.copy(input_path, safe_input_path)
+            # copyfile avoids chmod (EPERM on Windows/WSL bind mounts)
+            shutil.copyfile(input_path, safe_input_path)
 
             try:
                 # Upload video to Gemini
@@ -751,11 +1208,8 @@ async def generate_effects_config(
 
 @app.post("/api/subtitle")
 async def add_subtitles(req: SubtitleRequest):
-    if req.job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
     # Reload job data from disk just in case metadata was updated
-    job = jobs[req.job_id]
+    job = get_job_or_rehydrate(req.job_id)
     
     # We need to access metadata.json to get the transcript
     output_dir = os.path.join(OUTPUT_DIR, req.job_id)
@@ -828,7 +1282,8 @@ async def add_subtitles(req: SubtitleRequest):
                            alignment=req.position, fontsize=req.font_size,
                            font_name=req.font_name, font_color=req.font_color,
                            border_color=req.border_color, border_width=req.border_width,
-                           bg_color=req.bg_color, bg_opacity=req.bg_opacity)
+                           bg_color=req.bg_color, bg_opacity=req.bg_opacity,
+                           margin_v=req.margin_v)
         
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, run_burn)
@@ -872,10 +1327,7 @@ class HookRequest(BaseModel):
 
 @app.post("/api/hook")
 async def add_hook(req: HookRequest):
-    if req.job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    job = jobs[req.job_id]
+    job = get_job_or_rehydrate(req.job_id)
     output_dir = os.path.join(OUTPUT_DIR, req.job_id)
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
     
@@ -945,6 +1397,128 @@ async def add_hook(req: HookRequest):
         "new_video_url": f"/videos/{req.job_id}/{output_filename}"
     }
 
+class RecropRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    x: float = 0.5     # horizontal position of crop window: 0=left .. 1=right
+    y: float = 0.5     # vertical position: 0=top .. 1=bottom
+    zoom: float = 1.0  # 1.0 = full source height, higher = tighter crop
+
+
+def _even(n):
+    n = int(n)
+    return n - (n % 2)
+
+
+@app.get("/api/clip/{job_id}/{clip_index}/source")
+async def get_clip_source(job_id: str, clip_index: int):
+    """Report whether the original-aspect (16:9) footage for a clip is retained,
+    and where to load it (for the manual crop editor's preview)."""
+    output_dir = os.path.join(OUTPUT_DIR, job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+    base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+    source_file = f"{base_name}_clip_{clip_index+1}_source.mp4"
+    available = os.path.exists(os.path.join(output_dir, source_file))
+    return {
+        "available": available,
+        "source_url": f"/videos/{job_id}/{source_file}" if available else None,
+    }
+
+
+@app.post("/api/recrop")
+async def recrop_clip(req: RecropRequest):
+    """Re-render one clip from its retained 16:9 source with a new crop window
+    (position + zoom). Non-destructive: writes recrop_*.mp4 and repoints the clip."""
+    job = get_job_or_rehydrate(req.job_id)
+    output_dir = os.path.join(OUTPUT_DIR, req.job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+
+    with open(json_files[0], 'r') as f:
+        data = json.load(f)
+    clips = data.get('shorts', [])
+    if req.clip_index >= len(clips):
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+    source_path = os.path.join(output_dir, f"{base_name}_clip_{req.clip_index+1}_source.mp4")
+    if not os.path.exists(source_path):
+        raise HTTPException(
+            status_code=404,
+            detail="Original footage isn't available for this clip. Manual re-crop only works on clips generated after this feature was added — regenerate the video to enable it.",
+        )
+
+    # Read source dimensions.
+    try:
+        probe = subprocess.check_output([
+            'ffprobe', '-v', 'error', '-select_streams', 'v:0',
+            '-show_entries', 'stream=width,height', '-of', 'csv=p=0:s=x', source_path
+        ]).decode().strip()
+        sw, sh = [int(v) for v in probe.split('x')[:2]]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not read source video: {e}")
+
+    # Clamp inputs.
+    x = min(max(req.x, 0.0), 1.0)
+    y = min(max(req.y, 0.0), 1.0)
+    zoom = min(max(req.zoom, 1.0), 3.0)
+
+    # Crop window is 9:16; height shrinks as zoom grows.
+    crop_h = _even(sh / zoom)
+    crop_w = _even(crop_h * 9 / 16)
+    if crop_w > sw:
+        crop_w = _even(sw)
+        crop_h = _even(crop_w * 16 / 9)
+    if crop_h > sh:
+        crop_h = _even(sh)
+    cx = max(0, _even(x * (sw - crop_w)))
+    cy = max(0, _even(y * (sh - crop_h)))
+
+    # Output matches the pipeline (height = source height; width rounded up to even),
+    # so re-cropped clips are the exact same dimensions as the originals.
+    out_h = _even(sh)
+    out_w = int(out_h * 9 / 16)
+    if out_w % 2 != 0:
+        out_w += 1
+
+    output_filename = f"recrop_{base_name}_clip_{req.clip_index+1}.mp4"
+    output_path = os.path.join(output_dir, output_filename)
+    vf = f"crop={crop_w}:{crop_h}:{cx}:{cy},scale={out_w}:{out_h}"
+    cmd = [
+        'ffmpeg', '-y', '-i', source_path, '-vf', vf,
+        '-c:v', 'libx264', '-crf', '20', '-preset', 'fast',
+        '-pix_fmt', 'yuv420p', '-profile:v', 'high',
+        '-c:a', 'copy', '-movflags', '+faststart', output_path
+    ]
+
+    try:
+        def run_crop():
+            r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            if r.returncode != 0:
+                raise RuntimeError(r.stderr.decode()[-500:])
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, run_crop)
+    except Exception as e:
+        print(f"❌ Recrop Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    new_url = f"/videos/{req.job_id}/{output_filename}"
+    if req.clip_index < len(job['result']['clips']):
+        job['result']['clips'][req.clip_index]['video_url'] = new_url
+    try:
+        clips[req.clip_index]['video_url'] = new_url
+        data['shorts'] = clips
+        with open(json_files[0], 'w') as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        print(f"⚠️ Failed to update metadata after recrop: {e}")
+
+    return {"success": True, "new_video_url": new_url}
+
+
 class TranslateRequest(BaseModel):
     job_id: str
     clip_index: int
@@ -966,10 +1540,7 @@ async def translate_clip(
     if not x_elevenlabs_key:
         raise HTTPException(status_code=400, detail="Missing X-ElevenLabs-Key header")
 
-    if req.job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    job = jobs[req.job_id]
+    job = get_job_or_rehydrate(req.job_id)
     output_dir = os.path.join(OUTPUT_DIR, req.job_id)
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
 
@@ -1057,10 +1628,7 @@ import httpx
 
 @app.post("/api/social/post")
 async def post_to_socials(req: SocialPostRequest):
-    if req.job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    job = jobs[req.job_id]
+    job = get_job_or_rehydrate(req.job_id)
     if 'result' not in job or 'clips' not in job['result']:
         raise HTTPException(status_code=400, detail="Job result not available")
         

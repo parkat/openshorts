@@ -1,6 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, lazy, Suspense } from 'react';
 import { X, Sparkles, Loader2, Maximize, MoveVertical, Zap } from 'lucide-react';
-import RemotionPreview from './RemotionPreview';
+
+// Remotion's <Player> is ~184KB — a quarter of the JS bundle — and is only ever
+// seen inside this modal. Loading it on demand keeps it out of the initial parse
+// on every page view; the modal itself opens instantly and the preview fades in.
+const RemotionPreview = React.lazy(() => import('./RemotionPreview'));
 
 const ENTRANCE_OPTIONS = [
     { value: 'spring', label: 'Bounce' },
@@ -59,12 +63,14 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
                 {/* Left: Preview */}
                 <div className="flex-1 flex flex-col items-center justify-center bg-black rounded-lg border border-white/5 overflow-hidden relative aspect-[9/16] max-h-[600px]">
                     {useRemotionPreview ? (
-                        <RemotionPreview
-                            videoUrl={videoUrl}
-                            durationInSeconds={durationInSeconds || 30}
-                            hook={hookConfig}
-                            subtitles={existingSubtitles || null}
-                        />
+                        <Suspense fallback={<div className="flex items-center gap-2 text-zinc-500 text-sm"><Loader2 size={16} className="animate-spin" /> Loading preview…</div>}>
+                            <RemotionPreview
+                                videoUrl={videoUrl}
+                                durationInSeconds={durationInSeconds || 30}
+                                hook={hookConfig}
+                                subtitles={existingSubtitles || null}
+                            />
+                        </Suspense>
                     ) : (
                         <>
                             <video src={videoUrl} className="w-full h-full object-contain opacity-50" muted playsInline />
