@@ -1,6 +1,7 @@
-import React, { useState, useEffect, lazy, Suspense } from 'react';
+import React, { useState, useEffect, lazy, Suspense, useMemo } from 'react';
 import { X, Type, Loader2, Save, Trash2, Bookmark } from 'lucide-react';
 import { getApiUrl } from '../config';
+import useDebouncedValue from '../lib/useDebouncedValue';
 import { buildSubtitleConfig, positionZone, ffMarginV } from '../lib/subtitleConfig';
 import { listPresets, savePreset, deletePreset } from '../lib/presetsApi';
 
@@ -145,12 +146,28 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
         setCaptions(newCaptions);
     };
 
+    // Coarse zone + FFmpeg fallback margin + Remotion config (shared with batch).
+    //
+    // Memoised and then debounced for the preview. This config used to be rebuilt
+    // on every render and handed straight to the Player, whose inputProps identity
+    // change re-renders the whole composition — and this composition maps every
+    // caption word on every frame. Editing the text was doing that per keystroke,
+    // on top of rebuilding all the caption objects.
+    // Built from currentSettings() rather than an inline copy of its fields, so
+    // adding a setting cannot leave the preview reading a stale subset.
+    const subtitleConfig = useMemo(
+        () => buildSubtitleConfig(currentSettings(), captions),
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [positionY, fontSize, fontName, fontColor, highlightColor, borderColor,
+         borderWidth, bgColor, bgOpacity, animation, captions],
+    );
+    const previewConfig = useDebouncedValue(subtitleConfig, 250);
+
+    // Below every hook — see HookModal for why.
     if (!isOpen) return null;
 
-    // Coarse zone + FFmpeg fallback margin + Remotion config (shared with batch).
     const zone = positionZone(positionY);
     const marginV = ffMarginV(positionY);
-    const subtitleConfig = buildSubtitleConfig(currentSettings(), captions);
 
     // Fallback: static CSS preview (same as original)
     const bw = Math.max(borderWidth, 0);
@@ -203,7 +220,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
                             <RemotionPreview
                                 videoUrl={videoUrl}
                                 durationInSeconds={durationSec}
-                                subtitles={subtitleConfig}
+                                subtitles={previewConfig}
                                 hook={existingHook || null}
                             />
                         </Suspense>

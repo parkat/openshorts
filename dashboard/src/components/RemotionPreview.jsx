@@ -14,7 +14,7 @@ import { ShortVideo } from '../remotion/compositions/ShortVideo';
  * @param {object|null} props.effects - EffectsConfig or null
  * @param {string} [props.className] - Additional CSS classes
  */
-export default function RemotionPreview({
+function RemotionPreview({
     videoUrl,
     durationInSeconds = 30,
     subtitles = null,
@@ -59,3 +59,8 @@ export default function RemotionPreview({
         </div>
     );
 }
+
+// The Player re-renders its whole composition when inputProps change identity,
+// so it must not re-render just because a parent did. Callers hand it memoised
+// config objects; this makes that pay off.
+export default React.memo(RemotionPreview);
