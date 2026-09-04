@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   X, Type, Sparkles, Loader2, RotateCcw, Check, AlertTriangle, History, Send,
   Hash, Eye,
@@ -6,6 +6,7 @@ import {
 import SubtitleModal from '../SubtitleModal';
 import HookModal from '../HookModal';
 import { clipsApi, getApiUrl } from './api';
+import useDebouncedValue from '../../lib/useDebouncedValue';
 
 // The original project's clip editor, pointed at a clips-lane candidate.
 //
@@ -27,9 +28,35 @@ export default function ClipEditorModal({ candidate, onClose, onChanged }) {
   const [caption, setCaption] = useState(candidate.caption || '');
   const [title, setTitle] = useState(candidate.title || '');
   const [tags, setTags] = useState((candidate.hashtags || []).join(' '));
-  const [savedCopy, setSavedCopy] = useState(true);
+  const [saveState, setSaveState] = useState('saved');  // saved | saving | error
   const [captions, setCaptions] = useState(null);   // per-platform preview
   const [showPreview, setShowPreview] = useState(false);
+
+  // Tags are typed as free text so you can paste a block; they are normalised
+  // server-side on save (case, punctuation, duplicates) rather than fought with
+  // in an input.
+  const parseTags = (s) => (s.match(/#?[A-Za-z0-9_]+/g) || [])
+    .map((t) => (t.startsWith('#') ? t : `#${t}`));
+
+  const copy = useMemo(
+    () => ({ title, caption, hashtags: parseTags(tags) }),
+    [title, caption, tags],
+  );
+
+  // The publish copy saves itself.
+  //
+  // It used to need a button, and two things then quietly threw edits away:
+  // generating hashtags marked the whole form clean, so a typed title could no
+  // longer be saved; and Queue published from the database, so anything still in
+  // the boxes was posted as its previous value. Both are the same bug — what you
+  // are looking at was not what would go out. Persisting on idle removes it
+  // rather than papering over it with a warning.
+  const settled = useDebouncedValue(copy, 600);
+  const savedRef = useRef(JSON.stringify({
+    title: candidate.title || '',
+    caption: candidate.caption || '',
+    hashtags: candidate.hashtags || [],
+  }));
 
   const load = useCallback(async () => {
     try {
@@ -110,20 +137,43 @@ export default function ClipEditorModal({ candidate, onClose, onChanged }) {
     text: h.text, position: h.position, size: h.size,
   }));
 
-  // Tags are typed as free text so you can paste a block; they are normalised
-  // server-side on save (case, punctuation, duplicates) rather than fought with
-  // in an input.
-  const parseTags = (s) => (s.match(/#?[A-Za-z0-9_]+/g) || [])
-    .map((t) => (t.startsWith('#') ? t : `#${t}`));
+  // Writes what SENT, not what came back: the server normalises hashtags, so
+  // storing the normalised form here would leave the box permanently "dirty"
+  // against it and re-save on every render.
+  // Held in a ref because the parent passes a fresh closure on every render;
+  // as a dependency it would re-run the save effect on every render instead of
+  // when the copy actually changed.
+  const changedRef = useRef(onChanged);
+  changedRef.current = onChanged;
 
-  const saveCopy = () => run('copy', async () => {
-    await clipsApi.update(candidate.id, {
-      title, caption, hashtags: parseTags(tags),
-    });
-    setSavedCopy(true);
-  });
+  const persist = useCallback(async (payload) => {
+    const json = JSON.stringify(payload);
+    if (json === savedRef.current) return;
+    // Claim the write before awaiting, so two saves cannot race on the same edit.
+    savedRef.current = json;
+    setSaveState('saving');
+    try {
+      await clipsApi.update(candidate.id, payload);
+    } catch (e) {
+      savedRef.current = null;   // let it be retried
+      throw e;
+    }
+    setSaveState('saved');
+    const caps = await clipsApi.captions(candidate.id).catch(() => null);
+    if (caps) setCaptions(caps.captions);
+    changedRef.current?.();
+  }, [candidate.id]);
+
+  useEffect(() => {
+    persist(settled).catch((e) => { setSaveState('error'); setError(e.message); });
+  }, [settled, persist]);
+
+  // Anything that acts on the saved copy flushes first, so a change made a
+  // moment ago cannot be left behind by the debounce.
+  const flush = () => persist(copy);
 
   const writeTags = () => run('tags', async () => {
+    await flush();
     const res = await clipsApi.hashtags(candidate.id);
     if (res.captions) setCaptions(res.captions);
     // A failed call leaves the stored tags alone, so leave the box alone too.
@@ -131,7 +181,9 @@ export default function ClipEditorModal({ candidate, onClose, onChanged }) {
       throw new Error(res.error || 'the model returned no tags — try again');
     }
     setTags(res.hashtags.join(' '));
-    setSavedCopy(true);
+    // Generated tags are already stored; record them as saved so the idle save
+    // does not immediately write them back.
+    savedRef.current = JSON.stringify({ ...copy, hashtags: res.hashtags });
   });
 
   const rerenderClean = () => run('rerender', async () => {
@@ -147,6 +199,8 @@ export default function ClipEditorModal({ candidate, onClose, onChanged }) {
   });
 
   const queueToBuffer = () => run('publish', async () => {
+    // Post what is on screen, not what the debounce has got round to.
+    await flush();
     const res = await clipsApi.publish(candidate.id);
     const okCount = (res.results || []).filter((r) => r.ok).length;
     if (!okCount) {
@@ -247,13 +301,13 @@ export default function ClipEditorModal({ candidate, onClose, onChanged }) {
                 </h3>
                 <input
                   value={title}
-                  onChange={(e) => { setTitle(e.target.value); setSavedCopy(false); }}
+                  onChange={(e) => setTitle(e.target.value)}
                   placeholder="Publish title"
                   className="input-field text-sm mb-2"
                 />
                 <textarea
                   value={caption}
-                  onChange={(e) => { setCaption(e.target.value); setSavedCopy(false); }}
+                  onChange={(e) => setCaption(e.target.value)}
                   rows={4}
                   placeholder={candidate.hook
                     ? `Leave empty to post:\n\n${candidate.hook}\n\n${candidate.title || ''}`.trim()
@@ -282,7 +336,7 @@ export default function ClipEditorModal({ candidate, onClose, onChanged }) {
                   </div>
                   <textarea
                     value={tags}
-                    onChange={(e) => { setTags(e.target.value); setSavedCopy(false); }}
+                    onChange={(e) => setTags(e.target.value)}
                     rows={2}
                     placeholder="#dashcam #policechase — or generate them"
                     className="input-field text-sm resize-y font-mono"
@@ -294,16 +348,17 @@ export default function ClipEditorModal({ candidate, onClose, onChanged }) {
                 </div>
 
                 <div className="flex items-center gap-3 mt-3">
-                  <button
-                    onClick={saveCopy}
-                    disabled={!!busy || savedCopy}
-                    className={`${btn} bg-white/5 hover:bg-white/10 text-zinc-200`}
+                  <span
+                    className={`flex items-center gap-1.5 text-[11px] ${
+                      saveState === 'error' ? 'text-red-300' : 'text-zinc-500'
+                    }`}
+                    title="the publish copy saves itself as you type"
                   >
-                    {busy === 'copy'
-                      ? <Loader2 size={13} className="animate-spin" />
-                      : <Check size={13} />}
-                    {savedCopy ? 'Saved' : 'Save copy'}
-                  </button>
+                    {saveState === 'saving' && <Loader2 size={12} className="animate-spin" />}
+                    {saveState === 'saved' && <Check size={12} />}
+                    {saveState === 'error' && <AlertTriangle size={12} />}
+                    {{ saving: 'Saving…', saved: 'Saved', error: 'Not saved' }[saveState]}
+                  </span>
                   <button
                     onClick={queueToBuffer}
                     disabled={!!busy || !filename}
@@ -338,11 +393,6 @@ export default function ClipEditorModal({ candidate, onClose, onChanged }) {
                         </p>
                       </div>
                     ))}
-                    {!savedCopy && (
-                      <p className="text-[11px] text-amber-300/80">
-                        Showing the saved version — save to see your edits here.
-                      </p>
-                    )}
                   </div>
                 )}
               </div>
