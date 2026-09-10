@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Youtube, Upload, FileVideo, X, Scissors, Sparkles, HardDrive, RefreshCw, Eye } from 'lucide-react';
+import { Youtube, Upload, FileVideo, X, Scissors, Sparkles, HardDrive, RefreshCw, Eye, Search } from 'lucide-react';
 import { getApiUrl } from '../config';
 
 export default function MediaInput({ onProcess, onPlan, isProcessing }) {
@@ -12,6 +12,8 @@ export default function MediaInput({ onProcess, onPlan, isProcessing }) {
     const [serverPath, setServerPath] = useState('');
     const [serverFiles, setServerFiles] = useState([]);
     const [serverRoots, setServerRoots] = useState([]);
+    const [serverTruncated, setServerTruncated] = useState(false);
+    const [query, setQuery] = useState('');
     const [loadingLibrary, setLoadingLibrary] = useState(false);
     const [libraryError, setLibraryError] = useState('');
     const [acknowledged, setAcknowledged] = useState(false);
@@ -42,6 +44,7 @@ export default function MediaInput({ onProcess, onPlan, isProcessing }) {
             .then((data) => {
                 setServerFiles(data.files || []);
                 setServerRoots(data.roots || []);
+                setServerTruncated(!!data.truncated);
             })
             .catch((e) => setLibraryError(e.message))
             .finally(() => setLoadingLibrary(false));
@@ -99,6 +102,13 @@ export default function MediaInput({ onProcess, onPlan, isProcessing }) {
         }`;
 
     const prettySize = (mb) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
+
+    // A mounted network share can hold hundreds of clips (a dashcam folder alone
+    // does), so the picker filters rather than asking you to scroll past them.
+    const needle = query.trim().toLowerCase();
+    const visibleFiles = needle
+        ? serverFiles.filter((f) => `${f.rel_path} ${f.name}`.toLowerCase().includes(needle))
+        : serverFiles;
 
     return (
         <div className="bg-surface border border-white/5 rounded-2xl p-6 animate-[fadeIn_0.6s_ease-out]">
@@ -253,6 +263,11 @@ export default function MediaInput({ onProcess, onPlan, isProcessing }) {
                         <div className="flex items-center justify-between">
                             <p className="text-xs text-zinc-500">
                                 Files already on the server — no upload, no size limit.
+                                {serverFiles.length > 0 && (
+                                    <span className="text-zinc-600">
+                                        {' '}Showing {visibleFiles.length} of {serverFiles.length}.
+                                    </span>
+                                )}
                             </p>
                             <button
                                 type="button"
@@ -262,6 +277,18 @@ export default function MediaInput({ onProcess, onPlan, isProcessing }) {
                                 <RefreshCw size={13} className={loadingLibrary ? 'animate-spin' : ''} />
                                 Refresh
                             </button>
+                        </div>
+
+                        <div className="relative">
+                            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
+                            <input
+                                type="text"
+                                value={query}
+                                onChange={(e) => setQuery(e.target.value)}
+                                placeholder="Filter by name or folder…"
+                                className="input-field pl-9"
+                                spellCheck={false}
+                            />
                         </div>
 
                         <div className="border border-white/10 rounded-xl bg-white/5 max-h-56 overflow-y-auto divide-y divide-white/5">
@@ -276,7 +303,10 @@ export default function MediaInput({ onProcess, onPlan, isProcessing }) {
                                     Nothing here yet. Copy a video into {serverRoots.join(' or ') || 'the server media directory'} and refresh.
                                 </p>
                             )}
-                            {serverFiles.map((f) => (
+                            {!loadingLibrary && serverFiles.length > 0 && visibleFiles.length === 0 && (
+                                <p className="p-4 text-sm text-zinc-500">Nothing matches “{query}”.</p>
+                            )}
+                            {visibleFiles.map((f) => (
                                 <button
                                     key={f.path}
                                     type="button"
@@ -293,6 +323,12 @@ export default function MediaInput({ onProcess, onPlan, isProcessing }) {
                                 </button>
                             ))}
                         </div>
+
+                        {serverTruncated && (
+                            <p className="text-xs text-amber-400/80">
+                                Listing hit its cap — some files aren't shown. Filter, or paste the full path below.
+                            </p>
+                        )}
 
                         <div>
                             <p className="text-xs text-zinc-500 mb-1">…or paste a path on the server</p>

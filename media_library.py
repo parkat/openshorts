@@ -105,7 +105,12 @@ def _entry(root, full):
 
 
 def list_files():
-    """Every video file under every allowed root, newest first."""
+    """Every video file under every allowed root, newest first.
+
+    Returns (files, truncated) -- a network share can hold thousands of clips (a
+    dashcam folder alone is hundreds), and a silently short list is worse than a
+    flagged one.
+    """
     files = []
     for root in media_roots():
         root_depth = root.rstrip(os.sep).count(os.sep)
@@ -124,14 +129,18 @@ def list_files():
                     break
             if len(files) >= MAX_FILES:
                 break
+    truncated = len(files) >= MAX_FILES
     files.sort(key=lambda f: f["modified"], reverse=True)
-    return files
+    return files, truncated
 
 
 def library():
     """Payload for the dashboard's server-file picker."""
+    files, truncated = list_files()
     return {
         "roots": media_roots(),
-        "files": list_files(),
+        "files": files,
+        "truncated": truncated,
+        "limit": MAX_FILES,
         "generated_at": time.time(),
     }
