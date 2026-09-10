@@ -102,7 +102,7 @@ Async job queue with semaphore-based concurrency control. Configure via `MAX_CON
 - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_S3_BUCKET` - For S3 backup
 - `MAX_CONCURRENT_JOBS` - Concurrent processing limit (default: 5)
 - `MAX_FILE_SIZE_MB` - Browser-upload cap (default 2048; irrelevant behind Cloudflare, which caps bodies at 100MB)
-- `MEDIA_HOST_DIR` / `LOCAL_MEDIA_DIRS` - Host dir bind-mounted to `/app/media`, and the allowlist of dirs a `local_path` may point at. Multi-GB sources come in this way, not by upload — see `media_library.py` and OPERATING.md
+- `MEDIA_HOST_DIR` / `GARAGE_MEDIA_DIR` / `LOCAL_MEDIA_DIRS` - Host dirs bind-mounted to `/app/media` and `/app/media-garage` (the latter is the garage PC's `I:\Media` over CIFS), and the allowlist of dirs a `local_path` may point at. Multi-GB sources come in this way, not by upload — see `media_library.py` and OPERATING.md
 - `JOB_LOG_TAIL_LINES` - How many log lines a job keeps (default 400)
 - `VITE_API_URL` - Production API URL override
 

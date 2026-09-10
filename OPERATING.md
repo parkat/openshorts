@@ -147,6 +147,24 @@ dashboard's **Server File** tab lists whatever is in there — a path outside th
 allowlist is refused, so pasted paths can't walk into the rest of the filesystem. The
 file is read in place: nothing is copied, nothing is uploaded.
 
+**The garage PC's `I:\Media` is mounted on the box**, so a source living there needs no
+copy at all — it shows up in the picker directly:
+
+| Piece | Where |
+|---|---|
+| Share | `\\GARAGEPC\Media` → `I:\Media`, read-only to the dedicated `mediaro` local account (same one-account-per-purpose pattern as `hubcam` / `nvrsvc` on the NVR share) |
+| Credentials | `/etc/samba/credentials/garagepc-media` on the box, root-only 0600 |
+| Host mount | `/mnt/garage-media` via `/etc/fstab` (`ro,uid=999,nofail,_netdev`) — uid 999 because that's what the container runs as |
+| Container | `/app/media-garage` (read-only), from `GARAGE_MEDIA_DIR` in `.env` |
+| Listed because | `LOCAL_MEDIA_DIRS=/app/media:/app/media-garage` — the mount alone doesn't expose it |
+
+Gotchas: **the garage PC has to stay awake for the whole render**, since the source is
+read off the share the entire time, not copied first. And a bind mount is resolved when
+the container starts — if the CIFS mount drops and is remounted, the container keeps
+pointing at the old (empty) directory until it's recreated (`sudo docker compose -f
+docker-compose.yml -f docker-compose.gpu.yml up -d backend`). `mount | grep garage` on
+the box is the quick check when the picker suddenly lists nothing.
+
 **Server File + Split into Parts opens the planner** instead of rendering straight
 away. The cut list for a split is pure arithmetic on the duration, so the whole plan
 is computed in seconds and shown as cards — poster frame, in/out points, title, hook —

@@ -15,6 +15,11 @@ services:
       # request body at 100MB). Copy the file here over the LAN and pick it in the
       # dashboard's "Server File" tab. Set MEDIA_HOST_DIR in .env to point elsewhere.
       - ${MEDIA_HOST_DIR:-./media}:/app/media
+      # A network share mounted on the host (the garage PC's I:\Media lands at
+      # /mnt/garage-media on the box). Read-only, and invisible to the picker until
+      # LOCAL_MEDIA_DIRS names /app/media-garage -- the default here is a harmless
+      # re-mount of ./media so a dev box doesn't need the share to exist.
+      - ${GARAGE_MEDIA_DIR:-./media}:/app/media-garage:ro
     restart: unless-stopped
 
   frontend:
