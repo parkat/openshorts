@@ -127,6 +127,53 @@ falls back to `linear` and logs why. Force either with `--edit linear|loop`.
 Caveat: whisper's punctuation shifts with how much audio it is given, so re-cutting the
 same candidate can pick a different (still sentence-aligned) split.
 
+### Multi-GB sources (original lane): Server File + the split planner
+
+**Never try to upload a long source through the dashboard.** Cloudflare caps a request
+body at 100MB, so a 2-hour, multi-GB recording dies at the edge no matter what the
+backend's `MAX_FILE_SIZE_MB` says. Put the file on the box instead and pick it by path:
+
+```bash
+# from the machine holding the file (garage PC, desktop, wherever)
+scp big-recording.mp4 gpu-pc:~/openshorts/media/
+```
+
+`~/openshorts/media` is already inside the repo bind mount (`.:/app`), so it appears as
+`/app/media` with nothing more than `sudo docker restart openshorts-backend`. Pointing
+`MEDIA_HOST_DIR` at a directory *outside* the repo changes the container's volumes, and
+that needs a recreate (`sudo docker compose up -d backend`), not a restart.
+`LOCAL_MEDIA_DIRS` overrides the allowlist inside the container. The
+dashboard's **Server File** tab lists whatever is in there — a path outside the
+allowlist is refused, so pasted paths can't walk into the rest of the filesystem. The
+file is read in place: nothing is copied, nothing is uploaded.
+
+**Server File + Split into Parts opens the planner** instead of rendering straight
+away. The cut list for a split is pure arithmetic on the duration, so the whole plan
+is computed in seconds and shown as cards — poster frame, in/out points, title, hook —
+before a single part renders. From there:
+
+- **Title / hook / description templates** fill every part at once: `{n}`, `{nn}`
+  (zero-padded), `{total}`, `{name}`, `{start}`/`{end}`/`{duration}`. Typing over one
+  part's text locks it, so re-templating or renumbering won't overwrite it (**Reset
+  text** unlocks it).
+- **Re-split** at a different part length, nudge any boundary ±5s, or drop a part —
+  the remaining parts renumber and re-title themselves, and only moved parts get a
+  fresh poster frame.
+- **Bake into every part**: hook overlay and/or subtitles, applied as each part
+  finishes rather than one clip at a time in the editor afterwards.
+
+A split run **skips Whisper entirely** unless you asked for subtitles — the cut list
+never needed a transcript. Adding subtitles to a single part later still works: with no
+source transcript, `/api/subtitle` transcribes that part on its own.
+
+Progress shows as `part 12/40` next to the status pill; the log is a bounded tail (400
+lines, `JOB_LOG_TAIL_LINES`), because the dashboard re-downloads it every two seconds.
+
+Costs: each part is cut (re-encode) then reframed through the Python tracking pass, and
+a `*_clip_N_source.mp4` (16:9, for later re-crops) is kept beside each finished part —
+budget roughly 2-3x the source's size in `output/<job_id>/` and hours, not minutes, for
+a 2-hour source in Smart Crop. Blurred Bars is much cheaper.
+
 ### Publishing (both lanes, one calendar)
 
 `publishing.py` + the dashboard's **Publishing** tab own everything about what

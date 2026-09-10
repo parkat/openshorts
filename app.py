@@ -21,6 +21,8 @@ from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from pydantic import BaseModel
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
 import buffer_client
+import media_library
+import split_plan
 
 load_dotenv()
 
@@ -33,7 +35,11 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # Configuration
 # Default to 1 if not set, but user can set higher for powerful servers
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "5"))
-MAX_FILE_SIZE_MB = 2048  # 2GB limit
+MAX_FILE_SIZE_MB = int(os.environ.get("MAX_FILE_SIZE_MB", "2048"))  # browser uploads only
+# Anything bigger than a browser upload can carry (and behind Cloudflare that is
+# 100MB, whatever this says) comes in by path instead -- see media_library.py.
+SPLIT_PLAN_DIR = os.path.join(OUTPUT_DIR, "plans")
+os.makedirs(SPLIT_PLAN_DIR, exist_ok=True)
 # How long finished job folders (clips + metadata) survive before the cleanup task
 # purges them. 1 hour was far too aggressive for a local workflow where you generate
 # clips and then iterate on subtitles/hooks/crops. Default 24h; override via env.
@@ -45,6 +51,7 @@ job_queue = asyncio.Queue()
 jobs: Dict[str, Dict] = {}
 thumbnail_sessions: Dict[str, Dict] = {}
 publish_jobs: Dict[str, Dict] = {}  # {publish_id: {status, result, error}}
+split_plans: Dict[str, Dict] = {}  # {plan_id: previewed split-into-parts plan}
 # Semester to limit concurrency to MAX_CONCURRENT_JOBS
 concurrency_semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
 
@@ -138,7 +145,7 @@ def archive_job_clips(job_id, job_path):
 # Retention for those lanes is a lane decision (delete a source, reject a clip),
 # not a clock.
 DURABLE_PREFIXES = ("explainer-", "clips-")
-KEEP_DIRS = {"stock", "thumbnails", "archive"}
+KEEP_DIRS = {"stock", "thumbnails", "archive", "plans"}
 
 
 def _is_purgeable(name: str) -> bool:
@@ -171,6 +178,20 @@ async def cleanup_jobs():
                         shutil.rmtree(job_path, ignore_errors=True)
                         if job_id in jobs:
                             del jobs[job_id]
+
+            # Split-plan previews: poster frames only, and only useful while the
+            # plan is open. Purge per plan, not the whole `plans` directory.
+            try:
+                for plan_id in os.listdir(SPLIT_PLAN_DIR):
+                    plan_path = os.path.join(SPLIT_PLAN_DIR, plan_id)
+                    if os.path.isdir(plan_path) and now - os.path.getmtime(plan_path) > JOB_RETENTION_SECONDS:
+                        shutil.rmtree(plan_path, ignore_errors=True)
+                        split_plans.pop(plan_id, None)
+                for plan_id, plan in list(split_plans.items()):
+                    if now - plan.get("created_at", now) > JOB_RETENTION_SECONDS:
+                        del split_plans[plan_id]
+            except Exception as e:
+                print(f"⚠️ Split-plan cleanup failed: {e}")
 
             # Cleanup SaaSShorts jobs from memory
             try:
@@ -518,15 +539,54 @@ async def buffer_post(body: BufferPostBody, api_key: str = Header(None, alias="X
 class ProcessRequest(BaseModel):
     url: str
 
+# A forty-part render streams a lot of output, and the dashboard re-downloads the
+# whole log every two seconds -- so the log is a bounded tail, not a transcript.
+LOG_TAIL_LINES = int(os.environ.get("JOB_LOG_TAIL_LINES", "400"))
+MAX_LOG_LINE_CHARS = 500
+_PROGRESS_RE = re.compile(r"\d+%\|")  # a tqdm bar redrawing itself
+
+
+def _append_log(job_id, line):
+    """Append one line to a job's log, keeping it bounded and readable."""
+    job = jobs.get(job_id)
+    if job is None:
+        return
+    if len(line) > MAX_LOG_LINE_CHARS:
+        line = line[:MAX_LOG_LINE_CHARS] + "…"
+    logs = job['logs']
+    # Successive progress-bar redraws replace each other instead of stacking up.
+    if logs and _PROGRESS_RE.search(line) and _PROGRESS_RE.search(logs[-1]):
+        logs[-1] = line
+        return
+    logs.append(line)
+    if len(logs) > LOG_TAIL_LINES:
+        del logs[:len(logs) - LOG_TAIL_LINES]
+        logs[0] = "… earlier log lines trimmed …"
+
+
 def enqueue_output(out, job_id):
-    """Reads output from a subprocess and appends it to jobs logs."""
+    """Reads output from a subprocess and appends it to jobs logs.
+
+    Splits on carriage returns as well as newlines: the reframe pass draws a tqdm
+    bar with \r, and readline() alone would glue every refresh of a two-hour render
+    into one enormous "line".
+    """
+    buf = b""
     try:
-        for line in iter(out.readline, b''):
-            decoded_line = line.decode('utf-8').strip()
-            if decoded_line:
-                print(f"📝 [Job Output] {decoded_line}")
-                if job_id in jobs:
-                    jobs[job_id]['logs'].append(decoded_line)
+        for chunk in iter(lambda: out.read1(65536), b""):
+            buf += chunk
+            pieces = re.split(rb"[\r\n]", buf)
+            buf = pieces.pop()
+            for raw in pieces:
+                line = raw.decode("utf-8", "replace").strip()
+                if not line:
+                    continue
+                if not _PROGRESS_RE.search(line):
+                    print(f"📝 [Job Output] {line}")
+                _append_log(job_id, line)
+        tail = buf.decode("utf-8", "replace").strip()
+        if tail:
+            _append_log(job_id, tail)
     except Exception as e:
         print(f"Error reading output for job {job_id}: {e}")
     finally:
@@ -622,11 +682,24 @@ async def run_job(job_id, job_data):
                 clips = data.get('shorts', [])
                 cost_analysis = data.get('cost_analysis')
 
+                # Only surface parts that actually landed. On a long split run one
+                # part can fail (a corrupt stretch of source, say) without taking the
+                # other thirty-nine with it -- better to show 39 than 40 broken cards.
+                ready_clips = []
+                missing = 0
                 for i, clip in enumerate(clips):
                      clip_filename = f"{base_name}_clip_{i+1}.mp4"
-                     clip['video_url'] = f"/videos/{job_id}/{clip_filename}"
-                
-                jobs[job_id]['result'] = {'clips': clips, 'cost_analysis': cost_analysis}
+                     clip_path = os.path.join(output_dir, clip_filename)
+                     if os.path.exists(clip_path) and os.path.getsize(clip_path) > 0:
+                         clip['video_url'] = f"/videos/{job_id}/{clip_filename}"
+                         ready_clips.append(clip)
+                     else:
+                         missing += 1
+                if missing:
+                    jobs[job_id]['logs'].append(
+                        f"⚠️ {missing} of {len(clips)} parts did not render; showing the {len(ready_clips)} that did.")
+
+                jobs[job_id]['result'] = {'clips': ready_clips, 'cost_analysis': cost_analysis}
             else:
                  jobs[job_id]['status'] = 'failed'
                  jobs[job_id]['logs'].append("No metadata file generated.")
@@ -640,7 +713,199 @@ async def run_job(job_id, job_data):
 
 @app.get("/api/config")
 async def get_config():
-    return {"youtubeUrlEnabled": not DISABLE_YOUTUBE_URL}
+    return {
+        "youtubeUrlEnabled": not DISABLE_YOUTUBE_URL,
+        "localMediaEnabled": bool(media_library.media_roots()),
+        "maxUploadMb": MAX_FILE_SIZE_MB,
+    }
+
+
+# --- Server-side media + split planning -------------------------------------
+# A two-hour source is several GB. Browser uploads can't carry that (Cloudflare caps
+# a request body at 100MB), so the file is copied to the box out-of-band and named
+# here by path. And because a split cut list is pure arithmetic on the duration, it
+# can be previewed -- boundaries, sequential titles, poster frames -- before
+# committing hours of rendering to it.
+
+@app.get("/api/local-media")
+async def get_local_media():
+    """Video files sitting in the server's media directories, for the picker."""
+    return media_library.library()
+
+
+class SplitPlanRequest(BaseModel):
+    local_path: str
+    part_length: int = 180
+    title_template: Optional[str] = None
+    hook_template: Optional[str] = None
+    description_template: Optional[str] = None
+
+
+class SplitPlanApplyRequest(BaseModel):
+    part_length: Optional[int] = None
+    parts: Optional[List[Dict]] = None
+    title_template: Optional[str] = None
+    hook_template: Optional[str] = None
+    description_template: Optional[str] = None
+    resplit: bool = False
+
+
+def _thumb_url(plan_id, part):
+    stamp = int(part.get("thumb_stamp") or 0)
+    return f"/videos/plans/{plan_id}/part_{part['index']}.jpg?v={stamp}"
+
+
+def _plan_public(plan):
+    """The plan as the dashboard sees it."""
+    return {
+        "plan_id": plan["plan_id"],
+        "source_name": plan["source_name"],
+        "source_path": plan["source_path"],
+        "duration": plan["duration"],
+        "part_length": plan["part_length"],
+        "title_template": plan["title_template"],
+        "hook_template": plan["hook_template"],
+        "description_template": plan["description_template"],
+        "parts": plan["parts"],
+        "thumbs": plan["thumbs"],
+    }
+
+
+def _build_thumbnails(plan_id, indexes=None):
+    """Poster frames, in a worker thread. `indexes` limits it to edited parts."""
+    plan = split_plans.get(plan_id)
+    if not plan:
+        return
+    targets = [p for p in plan["parts"] if indexes is None or p["index"] in indexes]
+    plan["thumbs"] = {"done": 0, "total": len(targets), "state": "running"}
+    out_dir = os.path.join(SPLIT_PLAN_DIR, plan_id)
+    for i, part in enumerate(targets, start=1):
+        try:
+            split_plan.make_thumbnail(plan["source_path"], part, out_dir)
+            part["thumb_stamp"] = int(time.time() * 1000)
+            part["thumb_url"] = _thumb_url(plan_id, part)
+        except Exception as e:
+            print(f"WARN thumbnail failed for part {part['index']}: {e}")
+        plan["thumbs"] = {"done": i, "total": len(targets), "state": "running"}
+    plan["thumbs"] = {"done": len(targets), "total": len(targets), "state": "done"}
+
+
+@app.post("/api/split/plan")
+async def create_split_plan(req: SplitPlanRequest):
+    """Preview a split: boundaries + sequential naming + a poster frame per part."""
+    try:
+        source_path = media_library.resolve(req.local_path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    loop = asyncio.get_event_loop()
+    duration = await loop.run_in_executor(None, split_plan.probe_duration, source_path)
+    if duration <= 0:
+        raise HTTPException(status_code=400, detail="Could not read a duration from that file (ffprobe failed).")
+
+    part_length = max(10, min(int(req.part_length or 180), 3600))
+    source_name = os.path.splitext(os.path.basename(source_path))[0]
+
+    parts = split_plan.build_parts(duration, part_length)
+    split_plan.apply_templates(parts, source_name, req.title_template,
+                               req.hook_template, req.description_template)
+
+    plan_id = str(uuid.uuid4())
+    plan = {
+        "plan_id": plan_id,
+        "source_path": source_path,
+        "source_name": source_name,
+        "duration": duration,
+        "part_length": part_length,
+        "title_template": req.title_template if req.title_template is not None else split_plan.DEFAULT_TITLE_TEMPLATE,
+        "hook_template": req.hook_template if req.hook_template is not None else split_plan.DEFAULT_HOOK_TEMPLATE,
+        "description_template": req.description_template if req.description_template is not None else split_plan.DEFAULT_DESCRIPTION_TEMPLATE,
+        "parts": parts,
+        "thumbs": {"done": 0, "total": len(parts), "state": "queued"},
+        "created_at": time.time(),
+    }
+    split_plans[plan_id] = plan
+
+    # Poster frames are ~0.2s each with input seeking, but forty of them shouldn't
+    # hold the request open -- the dashboard polls and fills them in.
+    loop.run_in_executor(None, _build_thumbnails, plan_id, None)
+    return _plan_public(plan)
+
+
+@app.get("/api/split/plan/{plan_id}")
+async def get_split_plan(plan_id: str):
+    plan = split_plans.get(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found (the server may have restarted). Preview the file again.")
+    return _plan_public(plan)
+
+
+@app.post("/api/split/plan/{plan_id}/apply")
+async def apply_split_plan(plan_id: str, req: SplitPlanApplyRequest):
+    """Re-split, re-template, or accept hand-edited boundaries.
+
+    Templating lives server-side so the preview and the render fill placeholders
+    identically; the dashboard sends edits and gets the finished text back.
+    """
+    plan = split_plans.get(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found (the server may have restarted). Preview the file again.")
+
+    old_starts = {p["index"]: p["start"] for p in plan["parts"]}
+
+    if req.part_length:
+        plan["part_length"] = max(10, min(int(req.part_length), 3600))
+    if req.title_template is not None:
+        plan["title_template"] = req.title_template
+    if req.hook_template is not None:
+        plan["hook_template"] = req.hook_template
+    if req.description_template is not None:
+        plan["description_template"] = req.description_template
+
+    if req.resplit:
+        plan["parts"] = split_plan.build_parts(plan["duration"], plan["part_length"])
+    elif req.parts is not None:
+        cleaned = []
+        for part in req.parts:
+            try:
+                start = max(0.0, float(part.get("start", 0)))
+                end = min(float(plan["duration"]), float(part.get("end", 0)))
+            except (TypeError, ValueError):
+                continue
+            if end - start < 1.0:
+                continue  # a sub-second part is an editing slip, not a Short
+            cleaned.append({
+                "index": part.get("index"),
+                "start": round(start, 3),
+                "end": round(end, 3),
+                "title": part.get("title"),
+                "hook": part.get("hook"),
+                "description": part.get("description"),
+                "title_locked": bool(part.get("title_locked")),
+                "hook_locked": bool(part.get("hook_locked")),
+                "description_locked": bool(part.get("description_locked")),
+                "thumb_stamp": part.get("thumb_stamp"),
+            })
+        if not cleaned:
+            raise HTTPException(status_code=400, detail="A plan needs at least one part.")
+        plan["parts"] = cleaned
+
+    split_plan.renumber(plan["parts"])
+    split_plan.apply_templates(plan["parts"], plan["source_name"], plan["title_template"],
+                               plan["hook_template"], plan["description_template"])
+
+    # Only re-grab the frames whose in-point actually moved.
+    stale = {p["index"] for p in plan["parts"]
+             if old_starts.get(p["index"]) != p["start"] or not p.get("thumb_url")}
+    for part in plan["parts"]:
+        if part["index"] not in stale:
+            part["thumb_url"] = _thumb_url(plan_id, part)
+    if stale:
+        asyncio.get_event_loop().run_in_executor(None, _build_thumbnails, plan_id, stale)
+    else:
+        plan["thumbs"] = {"done": len(plan["parts"]), "total": len(plan["parts"]), "state": "done"}
+
+    return _plan_public(plan)
 
 @app.post("/api/process")
 async def process_endpoint(
@@ -650,22 +915,43 @@ async def process_endpoint(
     acknowledged: Optional[str] = Form(None),
     split_parts: Optional[str] = Form(None),
     part_length: Optional[str] = Form(None),
-    layout: Optional[str] = Form(None)
+    layout: Optional[str] = Form(None),
+    local_path: Optional[str] = Form(None)
 ):
     api_key = request.headers.get("X-Gemini-Key")
 
     ack_flag = str(acknowledged).lower() in ("1", "true", "yes")
     split_flag = str(split_parts).lower() in ("1", "true", "yes")
+    plan_id = None
+    plan_parts = None
+    bake_hooks = False
+    subtitle_style = None
 
-    # Handle JSON body manually for URL payload
+    # Handle JSON body manually for URL / server-path / approved-plan payloads
     content_type = request.headers.get("content-type", "")
     if "application/json" in content_type:
         body = await request.json()
         url = body.get("url")
+        local_path = body.get("local_path")
         ack_flag = bool(body.get("acknowledged"))
         split_flag = bool(body.get("split_parts"))
         part_length = body.get("part_length")
         layout = body.get("layout")
+        plan_id = body.get("plan_id")
+        plan_parts = body.get("parts")
+        bake_hooks = bool(body.get("bake_hooks"))
+        subtitle_style = body.get("subtitles") or None
+
+    # An approved plan carries its own parts and its own source. Fall back to the
+    # stored plan when the client sends only an id (and tolerate the server having
+    # restarted, as long as the client still holds the parts).
+    stored_plan = split_plans.get(plan_id) if plan_id else None
+    if plan_parts is None and stored_plan:
+        plan_parts = stored_plan["parts"]
+    if plan_parts and not local_path and stored_plan:
+        local_path = stored_plan["source_path"]
+    if plan_parts:
+        split_flag = True
 
     # Resolve part length (seconds); default 60, clamp to a sane range
     try:
@@ -681,8 +967,17 @@ async def process_endpoint(
     if not split_flag and not api_key:
         raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
 
-    if not url and not file:
-        raise HTTPException(status_code=400, detail="Must provide URL or File")
+    # A server-side path skips the upload entirely -- which is the only way a
+    # multi-GB source gets in at all behind Cloudflare's 100MB body cap.
+    source_path = None
+    if local_path:
+        try:
+            source_path = media_library.resolve(local_path)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    if not url and not file and not source_path:
+        raise HTTPException(status_code=400, detail="Must provide a URL, a file, or a server path")
 
     if not ack_flag:
         raise HTTPException(status_code=400, detail="You must confirm you own the content or have rights to process it.")
@@ -701,7 +996,7 @@ async def process_endpoint(
         "ip": client_ip,
         "user_agent": user_agent,
         "timestamp": time.time(),
-        "source": "url" if url else "file",
+        "source": "url" if url else ("local_path" if source_path else "file"),
     }
 
     job_id = str(uuid.uuid4())
@@ -714,7 +1009,11 @@ async def process_endpoint(
     if api_key:
         env["GEMINI_API_KEY"] = api_key # Override with key from request
 
-    if url:
+    if source_path:
+        # Read in place from the media directory: a two-hour source is several GB
+        # and copying it into uploads/ would just burn the disk twice.
+        cmd.extend(["-i", source_path])
+    elif url:
         cmd.extend(["-u", url])
     else:
         # Save uploaded file with size limit check
@@ -737,8 +1036,33 @@ async def process_endpoint(
 
     cmd.extend(["-o", job_output_dir])
 
-    if split_flag:
+    if plan_parts:
+        # The approved cut list, written where the child process (and a later
+        # post-mortem) can read exactly what was rendered.
+        plan_path = os.path.join(job_output_dir, "plan.json")
+        with open(plan_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "parts": plan_parts,
+                "options": {
+                    "layout": layout_mode,
+                    "bake_hooks": bake_hooks,
+                    "subtitles": subtitle_style,
+                    "source_path": source_path,
+                    "plan_id": plan_id,
+                },
+            }, f, indent=2)
+        cmd.extend(["--clips-plan", plan_path])
+    elif split_flag:
         cmd.extend(["--split-parts", "--part-length", str(part_len)])
+
+    if bake_hooks:
+        cmd.append("--bake-hooks")
+
+    if subtitle_style:
+        style_path = os.path.join(job_output_dir, "subtitle_style.json")
+        with open(style_path, "w", encoding="utf-8") as f:
+            json.dump(subtitle_style, f, indent=2)
+        cmd.extend(["--subtitle-style", style_path])
 
     if layout_mode == 'fit':
         cmd.extend(["--layout", "fit"])
@@ -798,13 +1122,31 @@ def get_job_or_rehydrate(job_id: str):
     jobs[job_id] = job
     return job
 
+_CLIP_PROGRESS_RE = re.compile(r"Processing Clip (\d+)/(\d+)")
+
+
+def _job_progress(job):
+    """{done, total} for a multi-part render, or None.
+
+    Read off the log rather than tracked separately: main.py is a subprocess, and
+    its "Processing Clip i/N" line is the only per-part signal that crosses the pipe.
+    """
+    for line in reversed(job.get('logs') or []):
+        match = _CLIP_PROGRESS_RE.search(line)
+        if match:
+            current, total = int(match.group(1)), int(match.group(2))
+            return {"done": current - 1, "current": current, "total": total}
+    return None
+
+
 @app.get("/api/status/{job_id}")
 async def get_status(job_id: str):
     job = get_job_or_rehydrate(job_id)
     return {
         "status": job['status'],
         "logs": job['logs'],
-        "result": job.get('result')
+        "result": job.get('result'),
+        "progress": _job_progress(job)
     }
 
 from editor import VideoEditor
@@ -1221,9 +1563,10 @@ async def add_subtitles(req: SubtitleRequest):
     with open(json_files[0], 'r') as f:
         data = json.load(f)
         
+    # A source transcript is a shortcut, not a requirement: split/plan runs skip
+    # Whisper on the full source (pointless for a cut list that is pure arithmetic),
+    # so when it isn't there we listen to the clip itself instead.
     transcript = data.get('transcript')
-    if not transcript:
-        raise HTTPException(status_code=400, detail="Transcript not found in metadata. Please process a new video.")
         
     clips = data.get('shorts', [])
     if req.clip_index >= len(clips):
@@ -1262,15 +1605,18 @@ async def add_subtitles(req: SubtitleRequest):
         # Check if this is a dubbed video - if so, transcribe it fresh
         is_dubbed = filename.startswith("translated_")
 
-        if is_dubbed:
-            print(f"🎙️ Dubbed video detected, transcribing audio for subtitles...")
+        success = False
+        if not is_dubbed and transcript:
+            success = generate_srt(transcript, clip_data['start'], clip_data['end'], srt_path)
+
+        if not success:
+            reason = "Dubbed video" if is_dubbed else "No source transcript"
+            print(f"🎙️ {reason}; transcribing this clip for subtitles...")
             def run_transcribe_srt():
                 return generate_srt_from_video(input_path, srt_path)
 
             loop = asyncio.get_event_loop()
             success = await loop.run_in_executor(None, run_transcribe_srt)
-        else:
-            success = generate_srt(transcript, clip_data['start'], clip_data['end'], srt_path)
 
         if not success:
              raise HTTPException(status_code=400, detail="No words found for this clip range.")

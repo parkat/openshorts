@@ -46,3 +46,13 @@ skills-lock.json
 # Local archive of expired clips (host-side; path set via ARCHIVE_HOST_DIR)
 archive/
 
+
+# Remotion render output (smoke tests, local previews)
+remotion/out/
+
+# Real artifacts extracted from the video chain (infra-chain piece)
+chain-artifacts/
+
+# Large local sources picked by the dashboard Server File tab
+media/*
+!media/README.md

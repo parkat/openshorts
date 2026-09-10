@@ -4,6 +4,7 @@ import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import ResultCard from './components/ResultCard';
 import ProcessingAnimation from './components/ProcessingAnimation';
+import SplitPlanner from './components/SplitPlanner';
 // import Gallery from './components/Gallery';
 
 // Split per tab. Each of these is a whole page you may never open in a session,
@@ -142,7 +143,8 @@ const UserProfileSelector = ({ profiles, selectedUserId, onSelect }) => {
 };
 
 const SESSION_KEY = 'openshorts_session';
-const SESSION_MAX_AGE = 3600000; // 1 hour (matches server job retention)
+const SESSION_MAX_AGE = 24 * 3600000; // 24h — matches JOB_RETENTION_SECONDS, and a
+// forty-part render outlives an hour, so a page refresh must not lose the job.
 
 // Mock polling function
 const pollJob = async (jobId) => {
@@ -191,6 +193,11 @@ function App() {
   const [logTimes, setLogTimes] = useState([]);
   const [logsVisible, setLogsVisible] = useState(true);
   const [processingMedia, setProcessingMedia] = useState(null);
+  // Split-into-parts preview: the approved cut list for a long source, before render.
+  const [plan, setPlan] = useState(null);
+  const [planBusy, setPlanBusy] = useState(false);
+  const [planError, setPlanError] = useState('');
+  const [progress, setProgress] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, settings
 
   const [sessionRecovered, setSessionRecovered] = useState(false);
@@ -350,7 +357,8 @@ function App() {
         jobId,
         status,
         results,
-        processingMedia: processingMedia?.type === 'url' ? processingMedia : null,
+        // A File object can't be serialized; a URL or a server-side path can.
+        processingMedia: ['url', 'local'].includes(processingMedia?.type) ? processingMedia : null,
         activeTab,
         timestamp: Date.now()
       };
@@ -426,6 +434,9 @@ function App() {
             // Update logs if available
             if (data.logs) setLogs(data.logs);
           }
+
+          // "Part 12/40" for a long split run.
+          setProgress(data.progress || null);
         } catch (e) {
           console.error("Polling error", e);
         }
@@ -475,10 +486,10 @@ function App() {
       let body;
       const headers = { 'X-Gemini-Key': apiKey };
 
-      if (data.type === 'url') {
+      if (data.type === 'url' || data.type === 'local') {
         headers['Content-Type'] = 'application/json';
         body = JSON.stringify({
-          url: data.payload,
+          ...(data.type === 'url' ? { url: data.payload } : { local_path: data.payload }),
           acknowledged: !!data.acknowledged,
           split_parts: data.clipMode === 'split',
           part_length: data.partLength || 60,
@@ -496,7 +507,7 @@ function App() {
 
       const res = await fetch(getApiUrl('/api/process'), {
         method: 'POST',
-        headers: data.type === 'url' ? headers : { 'X-Gemini-Key': apiKey },
+        headers: (data.type === 'url' || data.type === 'local') ? headers : { 'X-Gemini-Key': apiKey },
         body
       });
 
@@ -510,12 +521,59 @@ function App() {
     }
   };
 
+  const handlePlan = async (data) => {
+    setPlanBusy(true);
+    setPlanError('');
+    try {
+      const res = await fetch(getApiUrl('/api/split/plan'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          local_path: data.localPath,
+          part_length: data.partLength || 180,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const planData = await res.json();
+      setPlan({ ...planData, layout: data.layout || 'auto' });
+    } catch (e) {
+      setPlanError(e.message || 'Could not read that file.');
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+
+  const handleRenderPlan = async (payload) => {
+    setStatus('processing');
+    setLogs(["Starting render of " + payload.parts.length + " parts..."]);
+    setResults(null);
+    setProgress(null);
+    setProcessingMedia({ type: 'local', payload: payload.local_path });
+    try {
+      const res = await fetch(getApiUrl('/api/process'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Gemini-Key': apiKey },
+        body: JSON.stringify({ ...payload, acknowledged: true, split_parts: true }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const resData = await res.json();
+      setPlan(null);
+      setJobId(resData.job_id);
+    } catch (e) {
+      setStatus('error');
+      setLogs(l => [...l, `Error starting job: ${e.message}`]);
+    }
+  };
+
   const handleReset = () => {
     setStatus('idle');
     setJobId(null);
     setResults(null);
     setLogs([]);
     setProcessingMedia(null);
+    setPlan(null);
+    setPlanError('');
+    setProgress(null);
     localStorage.removeItem(SESSION_KEY);
   };
 
@@ -1050,8 +1108,22 @@ function App() {
             <Gallery />
           )} */}
 
+          {/* View: Split planner (approve the parts before rendering) */}
+          {activeTab === 'dashboard' && status === 'idle' && plan && (
+            <div className="h-full overflow-y-auto custom-scrollbar p-6">
+              <div className="max-w-6xl mx-auto">
+                <SplitPlanner
+                  plan={plan}
+                  layout={plan.layout}
+                  onBack={() => setPlan(null)}
+                  onRender={handleRenderPlan}
+                />
+              </div>
+            </div>
+          )}
+
           {/* View: Dashboard (Idle) */}
-          {activeTab === 'dashboard' && status === 'idle' && (
+          {activeTab === 'dashboard' && status === 'idle' && !plan && (
             <div className="h-full flex flex-col items-center justify-center p-6 animate-[fadeIn_0.3s_ease-out]">
               <div className="max-w-xl w-full text-center space-y-8">
                 <div className="space-y-4">
@@ -1063,7 +1135,20 @@ function App() {
                   </p>
                 </div>
 
-                <MediaInput onProcess={handleProcess} isProcessing={status === 'processing'} />
+                <MediaInput
+                  onProcess={handleProcess}
+                  onPlan={handlePlan}
+                  isProcessing={status === 'processing' || planBusy}
+                />
+
+                {planBusy && (
+                  <p className="text-sm text-zinc-400">Reading the file and laying out the parts…</p>
+                )}
+                {planError && (
+                  <div className="bg-red-500/10 border border-red-500/30 text-red-300 text-sm rounded-xl px-4 py-3 text-left">
+                    {planError}
+                  </div>
+                )}
 
                 <div className="flex items-center justify-center gap-8 text-zinc-500 text-sm">
                   <span className="flex items-center gap-2"><Youtube size={16} /> YouTube</span>
@@ -1090,6 +1175,9 @@ function App() {
                       'bg-red-500/10 border-red-500/20 text-red-400'
                     }`}>
                     {status.toUpperCase()}
+                    {status === 'processing' && progress && progress.total > 1 && (
+                      <span className="ml-2 text-zinc-300">part {progress.current}/{progress.total}</span>
+                    )}
                   </span>
                 </div>
 

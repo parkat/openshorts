@@ -19,6 +19,8 @@ from google import genai
 from dotenv import load_dotenv
 import json
 
+import split_plan
+
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='google.protobuf')
 
@@ -945,42 +947,83 @@ def get_viral_clips(transcript_result, video_duration):
         print(f"❌ Gemini Error: {e}")
         return None
 
-def build_split_clips(video_duration, part_length):
+def build_split_clips(video_duration, part_length, source_name=""):
+    """Consecutive parts covering the whole video, in `shorts` metadata shape.
+
+    Boundaries and sequential naming both come from split_plan, so a plan previewed
+    in the dashboard and a plan computed here from the same duration are identical.
+    """
     if not part_length or part_length <= 0:
         print(f"⚠️ Invalid --part-length ({part_length}); using whole video as one part.")
-        part_length = int(video_duration) if video_duration and video_duration > 0 else 60
-    shorts = []
-    start = 0.0
-    idx = 1
-    MIN_TAIL = max(1.0, part_length * 0.2)
-    while start < video_duration:
-        end = min(start + part_length, video_duration)
-        remainder = video_duration - end
-        if 0 < remainder < MIN_TAIL:
-            end = video_duration
-        shorts.append({
-            "start": round(start, 3),
-            "end": round(end, 3),
-            "video_title_for_youtube_short": f"Part {idx}",
-            "video_description_for_tiktok": "",
-            "video_description_for_instagram": "",
-            "viral_hook_text": f"Part {idx}",
-        })
-        idx += 1
-        if end >= video_duration:
-            break
-        start = end
-    if not shorts and video_duration > 0:
-        shorts.append({
-            "start": 0.0,
-            "end": round(video_duration, 3),
-            "video_title_for_youtube_short": "Part 1",
-            "video_description_for_tiktok": "",
-            "video_description_for_instagram": "",
-            "viral_hook_text": "Part 1",
-        })
+    parts = split_plan.build_parts(video_duration, part_length)
+    split_plan.apply_templates(parts, source_name or "Video")
+    shorts = split_plan.to_shorts(parts)
     print(f"✂️  Split into {len(shorts)} parts of ~{part_length}s each.")
     return {"shorts": shorts}
+
+
+def bake_clip_extras(clip_path, clip, transcript, bake_hook=False, subtitle_style=None):
+    """Burn the hook and/or subtitles into a finished part, in place.
+
+    The per-clip editor endpoints do this one clip at a time, which is fine for
+    three viral moments and unusable for forty parts. When the plan says every part
+    gets the same treatment, apply it here as each part finishes.
+    """
+    if not os.path.exists(clip_path):
+        return
+
+    if bake_hook:
+        hook_text = (clip.get('viral_hook_text') or '').strip()
+        if hook_text:
+            try:
+                # Imported lazily: hooks pulls in PIL + font downloads, and a run
+                # that bakes nothing shouldn't pay for that.
+                import hooks as hooks_module
+                staged = f"{os.path.splitext(clip_path)[0]}_hooked.mp4"
+                hooks_module.add_hook_to_video(
+                    clip_path, hook_text, staged,
+                    position=(subtitle_style or {}).get('hook_position', 'top'),
+                    font_scale=float((subtitle_style or {}).get('hook_scale', 1.0)),
+                )
+                if os.path.exists(staged):
+                    os.replace(staged, clip_path)
+                    print(f"   🪧 Hook baked: {hook_text!r}")
+            except Exception as e:
+                print(f"   ⚠️ Hook overlay failed (clip kept without it): {e}")
+
+    if subtitle_style is not None:
+        try:
+            from subtitles import generate_srt, generate_srt_from_video, burn_subtitles
+            srt_path = f"{os.path.splitext(clip_path)[0]}.srt"
+            ok = False
+            if transcript:
+                ok = generate_srt(transcript, clip['start'], clip['end'], srt_path)
+            if not ok:
+                # No full-source transcript (split runs skip it) — listen to the
+                # part itself. It's minutes long, so this is cheap.
+                ok = generate_srt_from_video(clip_path, srt_path)
+            if ok:
+                staged = f"{os.path.splitext(clip_path)[0]}_subbed.mp4"
+                burn_subtitles(
+                    clip_path, srt_path, staged,
+                    alignment={'top': 8, 'middle': 5, 'bottom': 2}.get(
+                        subtitle_style.get('position', 'bottom'), 2),
+                    fontsize=int(subtitle_style.get('font_size', 16)),
+                    font_name=subtitle_style.get('font_name', 'Verdana'),
+                    font_color=subtitle_style.get('font_color', '#FFFFFF'),
+                    border_color=subtitle_style.get('border_color', '#000000'),
+                    border_width=int(subtitle_style.get('border_width', 2)),
+                    bg_color=subtitle_style.get('bg_color', '#000000'),
+                    bg_opacity=float(subtitle_style.get('bg_opacity', 0.0)),
+                    margin_v=int(subtitle_style.get('margin_v', 25)),
+                )
+                if os.path.exists(staged):
+                    os.replace(staged, clip_path)
+                    print("   💬 Subtitles baked.")
+            else:
+                print("   ⚠️ No words found for this part; left without subtitles.")
+        except Exception as e:
+            print(f"   ⚠️ Subtitle burn failed (clip kept without them): {e}")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="AutoCrop-Vertical with Viral Clip Detection.")
@@ -996,6 +1039,14 @@ if __name__ == '__main__':
     parser.add_argument('--part-length', type=int, default=60, help="Length in seconds of each part when using --split-parts (default: 60).")
     parser.add_argument('--layout', type=str, choices=['auto', 'fit'], default='auto',
                         help="Reframe layout: 'auto' smart-crops single speakers and fits groups; 'fit' forces a blurred-background fit layout (whole frame visible, blurred bars for captions/hook).")
+    parser.add_argument('--clips-plan', type=str,
+                        help="Path to a plan.json (approved parts with start/end/title/hook). Replaces both Gemini detection and --split-parts arithmetic.")
+    parser.add_argument('--bake-hooks', action='store_true',
+                        help="Burn each clip's hook text into the finished clip (batch equivalent of the per-clip Hook tool).")
+    parser.add_argument('--subtitle-style', type=str,
+                        help="Path to a JSON subtitle style. Present = burn subtitles into every clip.")
+    parser.add_argument('--no-transcribe', action='store_true',
+                        help="Skip Whisper transcription. Split runs don't need it (no LLM call); subtitles added later transcribe the part itself.")
 
     args = parser.parse_args()
     REFRAME_LAYOUT = args.layout
@@ -1050,19 +1101,46 @@ if __name__ == '__main__':
         output_file = args.output if args.output else os.path.join(output_dir, f"{video_title}_vertical.mp4")
         process_video_to_vertical(input_video, output_file)
     else:
-        # 3. Transcribe
-        transcript = transcribe_video(input_video)
-        
-        # Get duration
-        cap = cv2.VideoCapture(input_video)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        duration = frame_count / fps
-        cap.release()
+        # 3. Load the subtitle style up front: it decides whether we need a transcript.
+        subtitle_style = None
+        if args.subtitle_style:
+            try:
+                with open(args.subtitle_style, 'r', encoding='utf-8') as f:
+                    subtitle_style = json.load(f)
+            except Exception as e:
+                print(f"⚠️ Could not read subtitle style ({e}); clips will render without subtitles.")
 
-        # 4. Analysis: Gemini viral detection OR sequential split
-        if args.split_parts:
-            clips_data = build_split_clips(duration, args.part_length)
+        # 4. Transcribe -- unless nothing downstream needs it. Gemini detection always
+        # does; a split/plan run only does when it's burning subtitles from the source
+        # transcript. On a two-hour source that skip is the difference between minutes
+        # of Whisper and none.
+        needs_transcript = not (args.split_parts or args.clips_plan) or subtitle_style is not None
+        if args.no_transcribe:
+            needs_transcript = False
+        if needs_transcript:
+            transcript = transcribe_video(input_video)
+        else:
+            print("⏭️  Skipping transcription (not needed for this run).")
+            transcript = None
+
+        # Duration: ffprobe first. cv2's frame_count/fps is wrong or zero on plenty of
+        # long recordings, and at two hours a small error is a whole missing part.
+        duration = split_plan.probe_duration(input_video)
+        if duration <= 0:
+            cap = cv2.VideoCapture(input_video)
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            duration = frame_count / fps if fps else 0
+            cap.release()
+        print(f"⏱️  Source duration: {duration:.1f}s")
+
+        # 5. Cut list: an approved plan, a sequential split, or Gemini detection.
+        if args.clips_plan:
+            shorts, _plan_options = split_plan.load_plan(args.clips_plan)
+            clips_data = {"shorts": shorts}
+            print(f"📋 Rendering {len(shorts)} approved parts from the plan.")
+        elif args.split_parts:
+            clips_data = build_split_clips(duration, args.part_length, video_title)
         else:
             clips_data = get_viral_clips(transcript, duration)
         
@@ -1071,9 +1149,12 @@ if __name__ == '__main__':
             output_file = os.path.join(output_dir, f"{video_title}_vertical.mp4")
             process_video_to_vertical(input_video, output_file)
         else:
-            print(f"🔥 Found {len(clips_data['shorts'])} viral clips!")
-            
-            # Save metadata
+            total_clips = len(clips_data['shorts'])
+            if not (args.clips_plan or args.split_parts):
+                print(f"🔥 Found {total_clips} viral clips!")
+
+            # Save metadata. `transcript` may be None on a split/plan run that skipped
+            # Whisper -- the subtitle tool falls back to transcribing the clip itself.
             clips_data['transcript'] = transcript # Save full transcript for subtitles
             metadata_file = os.path.join(output_dir, f"{video_title}_metadata.json")
             with open(metadata_file, 'w') as f:
@@ -1084,7 +1165,8 @@ if __name__ == '__main__':
             for i, clip in enumerate(clips_data['shorts']):
                 start = clip['start']
                 end = clip['end']
-                print(f"\n🎬 Processing Clip {i+1}: {start}s - {end}s")
+                # "Clip i/N" is what the API's progress parser reads off the log.
+                print(f"\n🎬 Processing Clip {i+1}/{total_clips}: {start}s - {end}s")
                 print(f"   Title: {clip.get('video_title_for_youtube_short', 'No Title')}")
                 
                 # Cut clip
@@ -1110,7 +1192,13 @@ if __name__ == '__main__':
                 success = process_video_to_vertical(clip_temp_path, clip_final_path)
                 
                 if success:
-                    print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
+                    # Hook / subtitles for every clip at once, while we're here.
+                    bake_clip_extras(
+                        clip_final_path, clip, transcript,
+                        bake_hook=args.bake_hooks,
+                        subtitle_style=subtitle_style,
+                    )
+                    print(f"   ✅ Clip {i+1}/{total_clips} ready: {clip_final_path}")
 
                 # Retain the original-aspect (16:9) clip segment as *_source.mp4 so the
                 # clip can be manually re-cropped later without the full source video or

@@ -11,6 +11,10 @@ services:
       # Persistent archive on the host (outside the project). Expired jobs are copied
       # here before the cleanup purges them. Set ARCHIVE_HOST_DIR in .env.
       - ${ARCHIVE_HOST_DIR:-./archive}:/app/archive
+      # Big sources that can't be uploaded through the browser (Cloudflare caps a
+      # request body at 100MB). Copy the file here over the LAN and pick it in the
+      # dashboard's "Server File" tab. Set MEDIA_HOST_DIR in .env to point elsewhere.
+      - ${MEDIA_HOST_DIR:-./media}:/app/media
     restart: unless-stopped
 
   frontend:
