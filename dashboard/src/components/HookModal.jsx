@@ -1,6 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, lazy, Suspense } from 'react';
 import { X, Sparkles, Loader2, Maximize, MoveVertical, Zap } from 'lucide-react';
-import RemotionPreview from './RemotionPreview';
+import useDebouncedValue from '../lib/useDebouncedValue';
+
+// Remotion's <Player> is ~184KB — a quarter of the JS bundle — and is only ever
+// seen inside this modal. Loading it on demand keeps it out of the initial parse
+// on every page view; the modal itself opens instantly and the preview fades in.
+const RemotionPreview = React.lazy(() => import('./RemotionPreview'));
 
 const ENTRANCE_OPTIONS = [
     { value: 'spring', label: 'Bounce' },
@@ -16,16 +21,26 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
     const [entranceAnimation, setEntranceAnimation] = useState('spring');
     const [displayDuration, setDisplayDuration] = useState(5);
 
-    if (!isOpen) return null;
-
-    // Build hook config for Remotion preview
-    const hookConfig = {
+    // What gets committed: always the live values.
+    const hookConfig = useMemo(() => ({
         text: text || 'Enter your text...',
         position,
         size,
         entranceAnimation,
         displayDurationSec: displayDuration,
-    };
+    }), [text, position, size, entranceAnimation, displayDuration]);
+
+    // What the preview watches: the same thing, a beat behind.
+    //
+    // The Player re-renders the whole composition whenever its inputProps change
+    // identity, and this object used to be rebuilt on every render — so every
+    // keystroke re-rendered a 1080x1920 composition with a playing video in it.
+    // Typing now costs one input update; the preview catches up when you pause.
+    const previewConfig = useDebouncedValue(hookConfig, 250);
+
+    // Below every hook: bailing out earlier would change the hook count between
+    // renders, which React treats as a fatal error.
+    if (!isOpen) return null;
 
     const useRemotionPreview = !!videoUrl;
 
@@ -59,12 +74,14 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
                 {/* Left: Preview */}
                 <div className="flex-1 flex flex-col items-center justify-center bg-black rounded-lg border border-white/5 overflow-hidden relative aspect-[9/16] max-h-[600px]">
                     {useRemotionPreview ? (
-                        <RemotionPreview
-                            videoUrl={videoUrl}
-                            durationInSeconds={durationInSeconds || 30}
-                            hook={hookConfig}
-                            subtitles={existingSubtitles || null}
-                        />
+                        <Suspense fallback={<div className="flex items-center gap-2 text-zinc-500 text-sm"><Loader2 size={16} className="animate-spin" /> Loading preview…</div>}>
+                            <RemotionPreview
+                                videoUrl={videoUrl}
+                                durationInSeconds={durationInSeconds || 30}
+                                hook={previewConfig}
+                                subtitles={existingSubtitles || null}
+                            />
+                        </Suspense>
                     ) : (
                         <>
                             <video src={videoUrl} className="w-full h-full object-contain opacity-50" muted playsInline />

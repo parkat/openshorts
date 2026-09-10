@@ -6,6 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 OpenShorts is an AI-powered vertical video generator that transforms long YouTube videos or local uploads into viral-ready short clips (9:16 format) for TikTok, Instagram Reels, and YouTube Shorts. Uses Google Gemini 2.0 Flash for viral moment detection and title generation.
 
+### Current deployment & in-progress work (read `HANDOFF-explainer-pipeline.md`)
+- **Deployed on a GPU box** behind a Cloudflare Tunnel; `openshorts.parkat.us` is gated by **Cloudflare Access**. Frontend is served as a **production build** via `vite preview` (not the dev server) — `docker restart openshorts-frontend` to ship dashboard changes.
+- **Publishing = Buffer** for the main Post flow (`buffer_client.py`, `/api/buffer/*`), with clips hosted publicly for Buffer to fetch via **`media.parkat.us/m/<token>`** (no Access). Upload-Post remains for the Thumbnail/SaaS flows only.
+- **`OPENROUTER`** (one key: LLM/image/video/TTS via `openrouter_client.py`) and **`BUFFER`** live server-side in `openshorts/.env`.
+- **`HANDOFF-explainer-pipeline.md`** (repo root) is the source of truth for the new **Explainer lane** build (SQLite store, `explainer/` package, CLI + dashboard drivers). Read its §0 reconciliation first.
+- **`OPERATING.md`** (repo root) — how to actually reach and drive the box (SSH paths, deploy commands, gotchas). **Read it before running anything against the deployment.**
+- **Three lanes, one stack.** `/api/process` + `main.py` = the original clip generator (in-memory jobs). `explainer/` = script-first AI explainers. `clips/` = source-first clipping of long-form video. They share `store.py`, the render-service, and `brand.py`; they are parallel lanes, not layers — don't repurpose one for another.
+
 ## Development Commands
 
 ### Local Development (Docker)
@@ -52,9 +60,13 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 | `app.py` | FastAPI server with async job queue and REST endpoints |
 | `editor.py` | Gemini AI integration for dynamic video effects (FFmpeg filter generation) |
 | `hooks.py` | Hook text overlay generation with font rendering |
+| `media_library.py` | Server-side media allowlist: pick multi-GB sources by path instead of uploading them |
+| `split_plan.py` | Split-into-parts planning: boundaries, sequential naming templates, poster frames |
+| `dashboard/src/components/SplitPlanner.jsx` | Approve/edit the parts (names, hooks, boundaries, baked subtitles) before rendering |
 | `s3_uploader.py` | AWS S3 upload with caching |
 | `subtitles.py` | SRT generation, FFmpeg subtitle burning, and dubbed video transcription |
 | `translate.py` | ElevenLabs dubbing API for AI voice translation |
+| `clips/` | **Clips lane** — mine ONE long video for many standalone Shorts (`ingest`→`moments`→`cut`→`render`), SQLite-durable, `python -m clips`. Cuts are **payoff-first loops** by default (see `clips/cut.py`) |
 | `dashboard/src/App.jsx` | Main React component with state management |
 | `dashboard/src/components/TranslateModal.jsx` | Voice dubbing UI with language selection |
 
@@ -69,7 +81,10 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 ### API Endpoints
 | Method | Route | Purpose |
 |--------|-------|---------|
-| POST | `/api/process` | Submit video for processing |
+| GET | `/api/local-media` | List videos in the server's media dirs (Server File picker) |
+| POST | `/api/split/plan` | Preview a split-into-parts cut list (boundaries + names + poster frames) |
+| POST | `/api/split/plan/{plan_id}/apply` | Re-split / re-template / accept edited boundaries |
+| POST | `/api/process` | Submit video for processing (URL, upload, `local_path`, or an approved `plan`) |
 | GET | `/api/status/{job_id}` | Poll job status and logs |
 | POST | `/api/edit` | Apply AI video effects |
 | POST | `/api/subtitle` | Generate and apply subtitles (auto-transcribes dubbed videos) |
@@ -86,6 +101,9 @@ Async job queue with semaphore-based concurrency control. Configure via `MAX_CON
 **Server-side (.env):**
 - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_S3_BUCKET` - For S3 backup
 - `MAX_CONCURRENT_JOBS` - Concurrent processing limit (default: 5)
+- `MAX_FILE_SIZE_MB` - Browser-upload cap (default 2048; irrelevant behind Cloudflare, which caps bodies at 100MB)
+- `MEDIA_HOST_DIR` / `GARAGE_MEDIA_DIR` / `LOCAL_MEDIA_DIRS` - Host dirs bind-mounted to `/app/media` and `/app/media-garage` (the latter is the garage PC's `I:\Media` over CIFS), and the allowlist of dirs a `local_path` may point at. Multi-GB sources come in this way, not by upload — see `media_library.py` and OPERATING.md
+- `JOB_LOG_TAIL_LINES` - How many log lines a job keeps (default 400)
 - `VITE_API_URL` - Production API URL override
 
 **Client-side (localStorage, encrypted):**

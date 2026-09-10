@@ -9,8 +9,16 @@
   }
 }
 
+/* No backdrop-blur here, deliberately.
+   The page behind these panels is a flat #09090b, so blurring it produced the
+   same flat colour — an invisible effect that still forced the compositor to
+   re-blur every panel's backdrop on every scroll frame. A list of 25 cards meant
+   25 of those. The colour below is the /50 surface pre-composited against the
+   page background, so the result is pixel-identical and free.
+   Modal overlays keep their own blur: those sit over real content, where it
+   shows, and only one is ever mounted. */
 .glass-panel {
-  @apply bg-surface/50 backdrop-blur-xl border border-white/10 rounded-2xl shadow-xl;
+  @apply bg-[#111113] border border-white/10 rounded-2xl shadow-xl;
 }
 
 .input-field {

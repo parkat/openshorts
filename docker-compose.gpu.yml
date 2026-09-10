@@ -1,0 +1,12 @@
+# docker-compose.gpu.yml — GPU override; apply ON TOP of docker-compose.yml.
+# Pinned to the RTX 2060 SUPER (GPU 1) by UUID so the live NVR keeps the Tesla P100 (GPU 0).
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+services:
+  backend:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['GPU-d1f7fe23-5492-4268-6178-ae47b5b3971c']
+              capabilities: [gpu]

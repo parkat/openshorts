@@ -11,10 +11,17 @@ def transcribe_audio(video_path):
 
     print(f"🎙️  Transcribing audio from: {video_path}")
 
-    # Run on CPU with INT8 quantization for speed
-    model = WhisperModel("base", device="cpu", compute_type="int8")
+    # Accuracy matters for burned-in captions ("base" hallucinates on real footage).
+    # Prefer a larger model on the GPU; fall back to base/CPU if CUDA isn't available.
+    size = os.environ.get("WHISPER_MODEL", "medium")
+    try:
+        model = WhisperModel(size, device="cuda", compute_type="float16")
+    except Exception:
+        model = WhisperModel(os.environ.get("WHISPER_MODEL_CPU", "base"),
+                             device="cpu", compute_type="int8")
 
-    segments, info = model.transcribe(video_path, word_timestamps=True)
+    segments, info = model.transcribe(video_path, word_timestamps=True,
+                                      vad_filter=True, beam_size=5)
 
     transcript = {
         "segments": [],
@@ -148,7 +155,7 @@ def hex_to_ass_color(hex_color, opacity=1.0):
 def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
                    font_name="Verdana", font_color="#FFFFFF",
                    border_color="#000000", border_width=2,
-                   bg_color="#000000", bg_opacity=0.0):
+                   bg_color="#000000", bg_opacity=0.0, margin_v=25):
     """
     Burns subtitles into the video using FFmpeg.
     Supports two modes:
@@ -200,21 +207,30 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
         f"BorderStyle={border_style},"
         f"Outline={outline_width},"
         f"Shadow=0,"
-        f"MarginV=25,"
+        f"MarginV={int(margin_v)},"
         f"Bold=1"
     )
 
-    cmd = [
-        'ffmpeg', '-y',
-        '-i', video_path,
-        '-vf', f"subtitles='{safe_srt_path}':force_style='{style_string}'",
-        '-c:a', 'copy',
-        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
-        output_path
-    ]
+    def _burn(codec_args):
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', video_path,
+            '-vf', f"subtitles='{safe_srt_path}':force_style='{style_string}'",
+            '-c:a', 'copy',
+            *codec_args,
+            output_path
+        ]
+        print(f"🎬 Burning subtitles: {' '.join(cmd)}")
+        return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
-    print(f"🎬 Burning subtitles: {' '.join(cmd)}")
-    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    # Prefer the GPU (NVENC): the CPU x264 encode of a 1080p vertical clip can run
+    # well over Cloudflare's fixed 100s proxy limit, so adding subtitles remotely
+    # 524'd. NVENC finishes in seconds. Fall back to x264 if the GPU isn't present
+    # (this box gets repurposed for other GPU work / wiped), so it never hard-fails.
+    result = _burn(['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '23', '-pix_fmt', 'yuv420p'])
+    if result.returncode != 0:
+        print(f"⚠️ NVENC burn failed, falling back to libx264: {result.stderr.decode()[:300]}")
+        result = _burn(['-c:v', 'libx264', '-preset', 'fast', '-crf', '23'])
 
     if result.returncode != 0:
         print(f"❌ FFmpeg Subtitle Error: {result.stderr.decode()}")

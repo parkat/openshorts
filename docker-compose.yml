@@ -8,16 +8,47 @@ services:
       - .:/app
       - /app/__pycache__
       - ./output:/app/output
+      # Persistent archive on the host (outside the project). Expired jobs are copied
+      # here before the cleanup purges them. Set ARCHIVE_HOST_DIR in .env.
+      - ${ARCHIVE_HOST_DIR:-./archive}:/app/archive
+      # Big sources that can't be uploaded through the browser (Cloudflare caps a
+      # request body at 100MB). Copy the file here over the LAN and pick it in the
+      # dashboard's "Server File" tab. Set MEDIA_HOST_DIR in .env to point elsewhere.
+      - ${MEDIA_HOST_DIR:-./media}:/app/media
+      # A network share mounted on the host (the garage PC's I:\Media lands at
+      # /mnt/garage-media on the box). Read-only, and invisible to the picker until
+      # LOCAL_MEDIA_DIRS names /app/media-garage -- the default here is a harmless
+      # re-mount of ./media so a dev box doesn't need the share to exist.
+      - ${GARAGE_MEDIA_DIR:-./media}:/app/media-garage:ro
     restart: unless-stopped
 
   frontend:
     build: ./dashboard
     container_name: openshorts-frontend
+    # Served as a PRODUCTION build (vite preview), not the dev server: behind
+    # Cloudflare Access the dev server's HMR websocket can't connect and the
+    # client reload-loops. `docker restart openshorts-frontend` re-builds + serves.
+    command: sh -c "npm run build && npm run preview -- --host --port 5173"
     ports:
       - "5175:5173"
     volumes:
       - ./dashboard:/app
       - /app/node_modules
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+  # Explainer-lane background worker: scheduler drip + (optional) topic radar.
+  # No GPU needed. Shares code + the ./archive SQLite DB with the backend.
+  worker:
+    build: .
+    container_name: openshorts-worker
+    command: python -m explainer worker
+    volumes:
+      - .:/app
+      - /app/__pycache__
+      - ./output:/app/output
+      - ${ARCHIVE_HOST_DIR:-./archive}:/app/archive
     restart: unless-stopped
     depends_on:
       - backend

@@ -8,16 +8,11 @@ export interface RenderParams {
   renderId: string;
   jobId: string;
   clipIndex: number;
-  props: {
-    videoUrl: string;
-    durationInFrames: number;
-    fps: number;
-    width: number;
-    height: number;
-    subtitles: unknown;
-    hook: unknown;
-    effects: unknown;
-  };
+  // Composition id in the bundled Root (default "ShortVideo"). "ExplainerShort"
+  // for the explainer lane. Props are validated by that composition's own zod
+  // schema at selectComposition time, so we pass them through as-is here.
+  composition: string;
+  props: Record<string, unknown>;
 }
 
 /**
@@ -26,6 +21,7 @@ export interface RenderParams {
  */
 export async function executeRender(params: RenderParams): Promise<void> {
   const { renderId, jobId, clipIndex, props } = params;
+  const compositionId = params.composition || "ShortVideo";
   const job = renderJobs.get(renderId);
 
   if (!job) {
@@ -38,7 +34,7 @@ export async function executeRender(params: RenderParams): Promise<void> {
     job.progress = 0;
 
     console.log(
-      `[render-worker] Starting render ${renderId} (job=${jobId}, clip=${clipIndex})`
+      `[render-worker] Starting render ${renderId} (job=${jobId}, clip=${clipIndex}, comp=${compositionId})`
     );
 
     const bundleLocation = getBundleLocation();
@@ -46,7 +42,7 @@ export async function executeRender(params: RenderParams): Promise<void> {
     // Select the composition with the provided input props
     const composition = await selectComposition({
       serveUrl: bundleLocation,
-      id: "ShortVideo",
+      id: compositionId,
       inputProps: props,
     });
 
@@ -70,6 +66,7 @@ export async function executeRender(params: RenderParams): Promise<void> {
       serveUrl: bundleLocation,
       codec: "h264",
       crf: 22,
+      inputProps: props,
       outputLocation,
       onProgress: ({ progress }) => {
         const percent = Math.round(progress * 100);

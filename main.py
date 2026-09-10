@@ -19,6 +19,8 @@ from google import genai
 from dotenv import load_dotenv
 import json
 
+import split_plan
+
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='google.protobuf')
 
@@ -27,6 +29,12 @@ load_dotenv()
 
 # --- Constants ---
 ASPECT_RATIO = 9 / 16
+
+# Reframe layout, set from the --layout CLI flag:
+#   'auto' -> per-scene: TRACK (smart-crop single speaker) or GENERAL (blurred fit)
+#   'fit'  -> force the blurred-background fit layout for every scene (whole frame
+#            visible, blurred bars top/bottom — good for captions/hook, no crop drift)
+REFRAME_LAYOUT = 'auto'
 
 GEMINI_PROMPT_TEMPLATE = """
 You are a senior short-form video editor. Read the ENTIRE transcript and word-level timestamps to choose the 3–15 MOST VIRAL moments for TikTok/IG Reels/YouTube Shorts. Each clip must be between 15 and 60 seconds long.
@@ -69,6 +77,43 @@ OUTPUT — RETURN ONLY VALID JSON (no markdown, no comments). Order clips by pre
 
 # Load the YOLO model once (Keep for backup or scene analysis if needed)
 model = YOLO('yolov8n.pt')
+
+# Select YOLO device once. Use the GPU only when torch was actually built with
+# kernels for this GPU's compute capability AND a trivial CUDA op succeeds. This
+# avoids "CUDA error: operation not supported / no kernel image" crashes on GPUs
+# whose arch modern torch wheels dropped (e.g. GTX 1060 / sm_61) or when the
+# driver is too old for torch's bundled CUDA runtime. Falls back to CPU cleanly.
+def _select_yolo_device():
+    try:
+        if not torch.cuda.is_available():
+            return "cpu"
+        major, minor = torch.cuda.get_device_capability(0)
+        sm = f"sm_{major}{minor}"
+        arch_list = torch.cuda.get_arch_list()
+        if sm not in arch_list:
+            print(f"⚠️  YOLO: GPU {torch.cuda.get_device_name(0)} ({sm}) not in torch arch list {arch_list}; using CPU.")
+            return "cpu"
+        # Sanity op catches driver/runtime-too-old (e.g. cudaErrorNotSupported).
+        _ = torch.zeros(1, device="cuda") + 1
+        print(f"✅ YOLO: using GPU ({sm}).")
+        return 0
+    except Exception as e:
+        print(f"⚠️  YOLO: GPU unavailable ({type(e).__name__}: {e}); using CPU.")
+        return "cpu"
+
+# IMPORTANT: resolve this LAZILY, not at import time. _select_yolo_device() calls
+# torch.cuda.*, which initializes torch's CUDA context. On a driver/arch mismatch
+# (e.g. GTX 1060 / sm_61 with torch cu126) that context is left in a poisoned state
+# that then breaks CTranslate2 (faster-whisper) on GPU with "operation not supported".
+# Transcription runs before any reframing, so deferring this keeps CUDA clean for
+# Whisper and only touches torch-CUDA later, when YOLO is actually needed.
+YOLO_DEVICE = None
+
+def get_yolo_device():
+    global YOLO_DEVICE
+    if YOLO_DEVICE is None:
+        YOLO_DEVICE = _select_yolo_device()
+    return YOLO_DEVICE
 
 # --- MediaPipe Setup ---
 # Use standard Face Detection (BlazeFace) for speed
@@ -309,7 +354,7 @@ def detect_person_yolo(frame):
     Returns [x, y, w, h] of the person's 'upper body' approximation.
     """
     # Use the globally loaded model
-    results = model(frame, verbose=False, classes=[0]) # class 0 is person
+    results = model(frame, verbose=False, classes=[0], device=get_yolo_device()) # class 0 is person
     
     if not results:
         return None
@@ -487,10 +532,13 @@ def download_youtube_video(url, output_dir="."):
         'fragment_retries': 10,
         'nocheckcertificate': True,
         'cachedir': False,
+        # Let yt-dlp use its maintained default player clients. The old hardcoded
+        # list (tv_embed/android/mweb/web) is now SABR/PO-token blocked to a single
+        # 360p format (itag 18), which capped every clip at 360p. The 'default'
+        # set reaches the full DASH ladder (avc1 up to 1080p, VP9/AV1 up to 4K).
         'extractor_args': {
             'youtube': {
-                'player_client': ['tv_embed', 'android', 'mweb', 'web'],
-                'player_skip': ['webpage', 'configs'],
+                'player_client': ['default'],
             }
         },
         'http_headers': {
@@ -618,8 +666,13 @@ def process_video_to_vertical(input_video, final_output_video):
     cameraman = SmoothedCameraman(OUTPUT_WIDTH, OUTPUT_HEIGHT, original_width, original_height)
     
     # --- New Strategy: Per-Scene Analysis ---
-    print("\n   🤖 Step 3: Analyzing Scenes for Strategy (Single vs Group)...")
-    scene_strategies = analyze_scenes_strategy(input_video, scenes)
+    if REFRAME_LAYOUT == 'fit':
+        # Force the blurred-background fit layout for every scene (no smart-crop).
+        print("\n   🖼️ Step 3: Layout = blurred fit (forced for all scenes).")
+        scene_strategies = ['GENERAL'] * len(scenes)
+    else:
+        print("\n   🤖 Step 3: Analyzing Scenes for Strategy (Single vs Group)...")
+        scene_strategies = analyze_scenes_strategy(input_video, scenes)
     # scene_strategies is a list of 'TRACK' or 'General' corresponding to scenes
     
     print("\n   ✂️ Step 4: Processing video frames...")
@@ -628,6 +681,7 @@ def process_video_to_vertical(input_video, final_output_video):
         'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo',
         '-s', f'{OUTPUT_WIDTH}x{OUTPUT_HEIGHT}', '-pix_fmt', 'bgr24',
         '-r', str(fps), '-i', '-', '-c:v', 'libx264',
+        '-pix_fmt', 'yuv420p', '-profile:v', 'high',
         '-preset', 'fast', '-crf', '23', '-an', temp_video_output
     ]
 
@@ -725,12 +779,12 @@ def process_video_to_vertical(input_video, final_output_video):
     if os.path.exists(temp_audio_output):
         merge_command = [
             'ffmpeg', '-y', '-i', temp_video_output, '-i', temp_audio_output,
-            '-c:v', 'copy', '-c:a', 'copy', final_output_video
+            '-c:v', 'copy', '-c:a', 'copy', '-movflags', '+faststart', final_output_video
         ]
     else:
          merge_command = [
             'ffmpeg', '-y', '-i', temp_video_output,
-            '-c:v', 'copy', final_output_video
+            '-c:v', 'copy', '-movflags', '+faststart', final_output_video
         ]
         
     try:
@@ -748,11 +802,21 @@ def process_video_to_vertical(input_video, final_output_video):
     return True
 
 def transcribe_video(video_path):
-    print("🎙️  Transcribing video with Faster-Whisper (CPU Optimized)...")
+    print("🎙️  Transcribing video with Faster-Whisper...")
     from faster_whisper import WhisperModel
     
-    # Run on CPU with INT8 quantization for speed
-    model = WhisperModel("base", device="cpu", compute_type="int8")
+    # Try CTranslate2 on CUDA DIRECTLY, then fall back to CPU. Do NOT gate on
+    # torch.cuda.is_available(): that call initializes torch's CUDA context, and on a
+    # driver/arch mismatch (e.g. GTX 1060 + torch cu126, driver < 560) it poisons the
+    # process so CTranslate2's own CUDA init then fails with "operation not supported".
+    # CTranslate2 uses the system CUDA/cuDNN (which match the driver), so a direct try
+    # works when torch's would not. int8 on GPU (Pascal FP16 is crippled — never float16).
+    try:
+        model = WhisperModel("base", device="cuda", compute_type="int8")
+        print("   ⚡ Faster-Whisper on CUDA (int8).")
+    except Exception as e:
+        print(f"   ⚠️ CUDA Whisper unavailable ({e}); using CPU (int8).")
+        model = WhisperModel("base", device="cpu", compute_type="int8")
     
     segments, info = model.transcribe(video_path, word_timestamps=True)
     
@@ -802,8 +866,8 @@ def get_viral_clips(transcript_result, video_duration):
 
     client = genai.Client(api_key=api_key)
     
-    # We use gemini-2.5-flash as requested.
-    model_name = 'gemini-2.5-flash' 
+    # Rolling alias -> current stable Flash model (avoids retired-model 404s).
+    model_name = 'gemini-flash-latest'
     
     print(f"🤖  Initializing Gemini with model: {model_name}")
 
@@ -883,6 +947,84 @@ def get_viral_clips(transcript_result, video_duration):
         print(f"❌ Gemini Error: {e}")
         return None
 
+def build_split_clips(video_duration, part_length, source_name=""):
+    """Consecutive parts covering the whole video, in `shorts` metadata shape.
+
+    Boundaries and sequential naming both come from split_plan, so a plan previewed
+    in the dashboard and a plan computed here from the same duration are identical.
+    """
+    if not part_length or part_length <= 0:
+        print(f"⚠️ Invalid --part-length ({part_length}); using whole video as one part.")
+    parts = split_plan.build_parts(video_duration, part_length)
+    split_plan.apply_templates(parts, source_name or "Video")
+    shorts = split_plan.to_shorts(parts)
+    print(f"✂️  Split into {len(shorts)} parts of ~{part_length}s each.")
+    return {"shorts": shorts}
+
+
+def bake_clip_extras(clip_path, clip, transcript, bake_hook=False, subtitle_style=None):
+    """Burn the hook and/or subtitles into a finished part, in place.
+
+    The per-clip editor endpoints do this one clip at a time, which is fine for
+    three viral moments and unusable for forty parts. When the plan says every part
+    gets the same treatment, apply it here as each part finishes.
+    """
+    if not os.path.exists(clip_path):
+        return
+
+    if bake_hook:
+        hook_text = (clip.get('viral_hook_text') or '').strip()
+        if hook_text:
+            try:
+                # Imported lazily: hooks pulls in PIL + font downloads, and a run
+                # that bakes nothing shouldn't pay for that.
+                import hooks as hooks_module
+                staged = f"{os.path.splitext(clip_path)[0]}_hooked.mp4"
+                hooks_module.add_hook_to_video(
+                    clip_path, hook_text, staged,
+                    position=(subtitle_style or {}).get('hook_position', 'top'),
+                    font_scale=float((subtitle_style or {}).get('hook_scale', 1.0)),
+                )
+                if os.path.exists(staged):
+                    os.replace(staged, clip_path)
+                    print(f"   🪧 Hook baked: {hook_text!r}")
+            except Exception as e:
+                print(f"   ⚠️ Hook overlay failed (clip kept without it): {e}")
+
+    if subtitle_style is not None:
+        try:
+            from subtitles import generate_srt, generate_srt_from_video, burn_subtitles
+            srt_path = f"{os.path.splitext(clip_path)[0]}.srt"
+            ok = False
+            if transcript:
+                ok = generate_srt(transcript, clip['start'], clip['end'], srt_path)
+            if not ok:
+                # No full-source transcript (split runs skip it) — listen to the
+                # part itself. It's minutes long, so this is cheap.
+                ok = generate_srt_from_video(clip_path, srt_path)
+            if ok:
+                staged = f"{os.path.splitext(clip_path)[0]}_subbed.mp4"
+                burn_subtitles(
+                    clip_path, srt_path, staged,
+                    alignment={'top': 8, 'middle': 5, 'bottom': 2}.get(
+                        subtitle_style.get('position', 'bottom'), 2),
+                    fontsize=int(subtitle_style.get('font_size', 16)),
+                    font_name=subtitle_style.get('font_name', 'Verdana'),
+                    font_color=subtitle_style.get('font_color', '#FFFFFF'),
+                    border_color=subtitle_style.get('border_color', '#000000'),
+                    border_width=int(subtitle_style.get('border_width', 2)),
+                    bg_color=subtitle_style.get('bg_color', '#000000'),
+                    bg_opacity=float(subtitle_style.get('bg_opacity', 0.0)),
+                    margin_v=int(subtitle_style.get('margin_v', 25)),
+                )
+                if os.path.exists(staged):
+                    os.replace(staged, clip_path)
+                    print("   💬 Subtitles baked.")
+            else:
+                print("   ⚠️ No words found for this part; left without subtitles.")
+        except Exception as e:
+            print(f"   ⚠️ Subtitle burn failed (clip kept without them): {e}")
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="AutoCrop-Vertical with Viral Clip Detection.")
     
@@ -893,8 +1035,21 @@ if __name__ == '__main__':
     parser.add_argument('-o', '--output', type=str, help="Output directory or file (if processing whole video).")
     parser.add_argument('--keep-original', action='store_true', help="Keep the downloaded YouTube video.")
     parser.add_argument('--skip-analysis', action='store_true', help="Skip AI analysis and convert the whole video.")
-    
+    parser.add_argument('--split-parts', action='store_true', help="Split the whole video into consecutive vertical parts instead of AI viral detection.")
+    parser.add_argument('--part-length', type=int, default=60, help="Length in seconds of each part when using --split-parts (default: 60).")
+    parser.add_argument('--layout', type=str, choices=['auto', 'fit'], default='auto',
+                        help="Reframe layout: 'auto' smart-crops single speakers and fits groups; 'fit' forces a blurred-background fit layout (whole frame visible, blurred bars for captions/hook).")
+    parser.add_argument('--clips-plan', type=str,
+                        help="Path to a plan.json (approved parts with start/end/title/hook). Replaces both Gemini detection and --split-parts arithmetic.")
+    parser.add_argument('--bake-hooks', action='store_true',
+                        help="Burn each clip's hook text into the finished clip (batch equivalent of the per-clip Hook tool).")
+    parser.add_argument('--subtitle-style', type=str,
+                        help="Path to a JSON subtitle style. Present = burn subtitles into every clip.")
+    parser.add_argument('--no-transcribe', action='store_true',
+                        help="Skip Whisper transcription. Split runs don't need it (no LLM call); subtitles added later transcribe the part itself.")
+
     args = parser.parse_args()
+    REFRAME_LAYOUT = args.layout
 
     script_start_time = time.time()
     
@@ -946,27 +1101,60 @@ if __name__ == '__main__':
         output_file = args.output if args.output else os.path.join(output_dir, f"{video_title}_vertical.mp4")
         process_video_to_vertical(input_video, output_file)
     else:
-        # 3. Transcribe
-        transcript = transcribe_video(input_video)
-        
-        # Get duration
-        cap = cv2.VideoCapture(input_video)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        duration = frame_count / fps
-        cap.release()
+        # 3. Load the subtitle style up front: it decides whether we need a transcript.
+        subtitle_style = None
+        if args.subtitle_style:
+            try:
+                with open(args.subtitle_style, 'r', encoding='utf-8') as f:
+                    subtitle_style = json.load(f)
+            except Exception as e:
+                print(f"⚠️ Could not read subtitle style ({e}); clips will render without subtitles.")
 
-        # 4. Gemini Analysis
-        clips_data = get_viral_clips(transcript, duration)
+        # 4. Transcribe -- unless nothing downstream needs it. Gemini detection always
+        # does; a split/plan run only does when it's burning subtitles from the source
+        # transcript. On a two-hour source that skip is the difference between minutes
+        # of Whisper and none.
+        needs_transcript = not (args.split_parts or args.clips_plan) or subtitle_style is not None
+        if args.no_transcribe:
+            needs_transcript = False
+        if needs_transcript:
+            transcript = transcribe_video(input_video)
+        else:
+            print("⏭️  Skipping transcription (not needed for this run).")
+            transcript = None
+
+        # Duration: ffprobe first. cv2's frame_count/fps is wrong or zero on plenty of
+        # long recordings, and at two hours a small error is a whole missing part.
+        duration = split_plan.probe_duration(input_video)
+        if duration <= 0:
+            cap = cv2.VideoCapture(input_video)
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            duration = frame_count / fps if fps else 0
+            cap.release()
+        print(f"⏱️  Source duration: {duration:.1f}s")
+
+        # 5. Cut list: an approved plan, a sequential split, or Gemini detection.
+        if args.clips_plan:
+            shorts, _plan_options = split_plan.load_plan(args.clips_plan)
+            clips_data = {"shorts": shorts}
+            print(f"📋 Rendering {len(shorts)} approved parts from the plan.")
+        elif args.split_parts:
+            clips_data = build_split_clips(duration, args.part_length, video_title)
+        else:
+            clips_data = get_viral_clips(transcript, duration)
         
         if not clips_data or 'shorts' not in clips_data:
             print("❌ Failed to identify clips. Converting whole video as fallback.")
             output_file = os.path.join(output_dir, f"{video_title}_vertical.mp4")
             process_video_to_vertical(input_video, output_file)
         else:
-            print(f"🔥 Found {len(clips_data['shorts'])} viral clips!")
-            
-            # Save metadata
+            total_clips = len(clips_data['shorts'])
+            if not (args.clips_plan or args.split_parts):
+                print(f"🔥 Found {total_clips} viral clips!")
+
+            # Save metadata. `transcript` may be None on a split/plan run that skipped
+            # Whisper -- the subtitle tool falls back to transcribing the clip itself.
             clips_data['transcript'] = transcript # Save full transcript for subtitles
             metadata_file = os.path.join(output_dir, f"{video_title}_metadata.json")
             with open(metadata_file, 'w') as f:
@@ -977,7 +1165,8 @@ if __name__ == '__main__':
             for i, clip in enumerate(clips_data['shorts']):
                 start = clip['start']
                 end = clip['end']
-                print(f"\n🎬 Processing Clip {i+1}: {start}s - {end}s")
+                # "Clip i/N" is what the API's progress parser reads off the log.
+                print(f"\n🎬 Processing Clip {i+1}/{total_clips}: {start}s - {end}s")
                 print(f"   Title: {clip.get('video_title_for_youtube_short', 'No Title')}")
                 
                 # Cut clip
@@ -993,7 +1182,8 @@ if __name__ == '__main__':
                     '-to', str(end), 
                     '-i', input_video,
                     '-c:v', 'libx264', '-crf', '18', '-preset', 'fast',
-                    '-c:a', 'aac',
+                    '-pix_fmt', 'yuv420p', '-profile:v', 'high',
+                    '-c:a', 'aac', '-movflags', '+faststart',
                     clip_temp_path
                 ]
                 subprocess.run(cut_command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -1002,11 +1192,20 @@ if __name__ == '__main__':
                 success = process_video_to_vertical(clip_temp_path, clip_final_path)
                 
                 if success:
-                    print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
-                
-                # Clean up temp cut
+                    # Hook / subtitles for every clip at once, while we're here.
+                    bake_clip_extras(
+                        clip_final_path, clip, transcript,
+                        bake_hook=args.bake_hooks,
+                        subtitle_style=subtitle_style,
+                    )
+                    print(f"   ✅ Clip {i+1}/{total_clips} ready: {clip_final_path}")
+
+                # Retain the original-aspect (16:9) clip segment as *_source.mp4 so the
+                # clip can be manually re-cropped later without the full source video or
+                # a re-download. Small (one clip's duration) and cleaned up with the job.
+                clip_source_path = os.path.join(output_dir, f"{video_title}_clip_{i+1}_source.mp4")
                 if os.path.exists(clip_temp_path):
-                    os.remove(clip_temp_path)
+                    os.replace(clip_temp_path, clip_source_path)
 
     # Clean up original if requested
     if args.url and not args.keep_original and os.path.exists(input_video):

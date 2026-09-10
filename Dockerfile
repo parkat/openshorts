@@ -1,28 +1,23 @@
-# Multi-stage build for smaller final image
-FROM python:3.11-slim AS builder
+# Single-stage build on a CUDA base for GPU acceleration (GTX 1060 / Pascal, sm_61).
+# CUDA 12.2 + cuDNN 8 runtime: required by CTranslate2 (faster-whisper) for GPU transcription.
+# This image STILL runs on CPU-only hosts (CUDA libs go unused); the GPU device reservation
+# lives ONLY in docker-compose.gpu.yml so `docker compose up` stays portable.
+FROM nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04
 
 WORKDIR /app
 
-# Install build dependencies
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Python 3.11 (deadsnakes) + FFmpeg + OpenCV runtime deps + Node.js (yt-dlp JS challenges).
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    ca-certificates \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
+    python3.11-dev \
     build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy and install Python dependencies
-# Copy and install Python dependencies
-COPY requirements.txt .
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-RUN pip install --upgrade pip
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Final stage
-FROM python:3.11-slim
-
-WORKDIR /app
-
-# Install FFmpeg, OpenCV dependencies, and Node.js (for yt-dlp JS challenges)
-RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libgl1 \
     libglib2.0-0 \
@@ -32,10 +27,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy virtual env from builder
-COPY --from=builder /opt/venv /opt/venv
+# Build the venv in-place with Python 3.11 (no cross-image slim-venv copy).
+RUN python3.11 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
+
+# Install Python dependencies. torch/torchvision resolve to cu126 (sm_61-capable) wheels
+# via the --extra-index-url pinned at the top of requirements.txt.
+COPY requirements.txt .
+# The large CUDA torch wheel (~700MB) is prone to mid-stream connection drops on
+# WSL2/flaky networks. Retry the whole install a few times; pip --retries alone
+# doesn't recover from a ProtocolError mid-download.
+RUN pip install --upgrade pip \
+    && for i in 1 2 3 4 5 6; do \
+         pip install --no-cache-dir --retries 5 --timeout 300 -r requirements.txt && break; \
+         echo "pip attempt $i failed, retrying in 5s..."; sleep 5; \
+       done \
+    && python -c "import torch, torchvision, faster_whisper, ctranslate2, ultralytics; print('core deps import OK; torch', torch.__version__)"
 
 # Always upgrade yt-dlp to latest (YouTube bot-detection changes frequently)
 RUN pip install --upgrade --no-cache-dir yt-dlp
@@ -43,7 +51,7 @@ RUN pip install --upgrade --no-cache-dir yt-dlp
 # Copy application code
 COPY . .
 
-# Create a non-root user (Moved up)
+# Create a non-root user
 RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
 
 # Create directories including Ultralytics cache config
@@ -54,7 +62,7 @@ RUN chown -R appuser:appuser /app /tmp/Ultralytics
 # Switch to non-root user
 USER appuser
 
-# Pre-download YOLO model on build (now running as appuser)
+# Pre-download YOLO model on build (CPU-only network download; NO GPU required at build time).
 RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
 
 # Expose FastAPI port

@@ -26,6 +26,9 @@ export interface SubtitleStyle {
 export interface SubtitleConfig {
   captions: CaptionWord[];
   position: SubtitlePosition;
+  /** Fine vertical position as a percent from the top (0=top .. 100=bottom).
+   *  When set, overrides the coarse `position` preset. */
+  positionY?: number;
   style: SubtitleStyle;
 }
 
@@ -92,6 +95,7 @@ export const subtitleStyleSchema = z.object({
 export const subtitleConfigSchema = z.object({
   captions: z.array(captionWordSchema),
   position: z.enum(["top", "middle", "bottom"]),
+  positionY: z.number().min(0).max(100).optional(),
   style: subtitleStyleSchema,
 });
 

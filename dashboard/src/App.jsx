@@ -1,15 +1,34 @@
-import React, { useState, useEffect } from 'react';
-import { Upload, FileVideo, Sparkles, Youtube, Instagram, Share2, LogOut, ChevronDown, Check, Activity, LayoutDashboard, Settings, PlusCircle, History, Menu, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2 } from 'lucide-react';
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
+import { Upload, FileVideo, Sparkles, Youtube, Instagram, Share2, LogOut, ChevronDown, Check, Activity, LayoutDashboard, Settings, PlusCircle, History, Menu, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, FlaskConical, Scissors, Send } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import ResultCard from './components/ResultCard';
 import ProcessingAnimation from './components/ProcessingAnimation';
+import SplitPlanner from './components/SplitPlanner';
 // import Gallery from './components/Gallery';
-import ThumbnailStudio from './components/ThumbnailStudio';
-import SaaShortsTab from './components/SaaShortsTab';
-import UGCGallery from './components/UGCGallery';
+
+// Split per tab. Each of these is a whole page you may never open in a session,
+// and every one of them was being parsed and evaluated before the first paint of
+// whichever tab you actually wanted. They load on first visit and stay loaded.
+const ThumbnailStudio = lazy(() => import('./components/ThumbnailStudio'));
+const ClipsTab = lazy(() => import('./components/clips/ClipsTab'));
+const PublishingTab = lazy(() => import('./components/publishing/PublishingTab'));
+const UGCGallery = lazy(() => import('./components/UGCGallery'));
+const ExplainerTab = lazy(() => import('./components/explainer/ExplainerTab'));
 import ScheduleWeekModal from './components/ScheduleWeekModal';
+import BatchBar from './components/BatchBar';
 import { getApiUrl } from './config';
+import { listPresets } from './lib/presetsApi';
+import { clipDownloadName } from './lib/downloadName';
+
+// Shown while a tab's chunk is fetched — a beat on first visit, never again.
+function TabLoading() {
+  return (
+    <div className="h-full flex items-center justify-center text-zinc-600 text-sm gap-2">
+      <Activity size={15} className="animate-pulse" /> Loading…
+    </div>
+  );
+}
 
 // Enhanced "Encryption" using XOR + Base64 with a Salt
 // This is better than plain Base64 but still client-side.
@@ -124,7 +143,8 @@ const UserProfileSelector = ({ profiles, selectedUserId, onSelect }) => {
 };
 
 const SESSION_KEY = 'openshorts_session';
-const SESSION_MAX_AGE = 3600000; // 1 hour (matches server job retention)
+const SESSION_MAX_AGE = 24 * 3600000; // 24h — matches JOB_RETENTION_SECONDS, and a
+// forty-part render outlives an hour, so a page refresh must not lose the job.
 
 // Mock polling function
 const pollJob = async (jobId) => {
@@ -156,18 +176,39 @@ function App() {
   });
 
   const [uploadUserId, setUploadUserId] = useState(() => localStorage.getItem('uploadUserId') || '');
+  const [bufferKey, setBufferKey] = useState(() => {
+    const stored = localStorage.getItem('bufferKey_v1');
+    return stored ? decrypt(stored) : '';
+  });
   const [userProfiles, setUserProfiles] = useState([]); // List of {username, connected: []}
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [jobId, setJobId] = useState(null);
   const [status, setStatus] = useState('idle'); // idle, processing, complete, error
   const [results, setResults] = useState(null);
   const [logs, setLogs] = useState([]);
+  // Stable per-line receive times. Logs arrive as a plain string array (replaced
+  // wholesale each poll), so we record the time each new index first appears and
+  // keep it fixed — otherwise rendering new Date() per line makes every timestamp
+  // jump to "now" on every re-render.
+  const [logTimes, setLogTimes] = useState([]);
   const [logsVisible, setLogsVisible] = useState(true);
   const [processingMedia, setProcessingMedia] = useState(null);
+  // Split-into-parts preview: the approved cut list for a long source, before render.
+  const [plan, setPlan] = useState(null);
+  const [planBusy, setPlanBusy] = useState(false);
+  const [planError, setPlanError] = useState('');
+  const [progress, setProgress] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, settings
 
   const [sessionRecovered, setSessionRecovered] = useState(false);
   const [showScheduleWeek, setShowScheduleWeek] = useState(false);
+
+  // --- Batch processing + clip selection ---
+  const [selected, setSelected] = useState(() => new Set());
+  const [batch, setBatch] = useState({ running: false, done: 0, total: 0, stage: '', error: '' });
+  const [subtitlePresets, setSubtitlePresets] = useState([]);
+  const cardRefs = useRef([]);
+  const batchAbortRef = useRef(null);
 
   // Sync state for original video playback
   const [syncedTime, setSyncedTime] = useState(0);
@@ -183,6 +224,102 @@ function App() {
   const handleClipPause = () => {
     setIsSyncedPlaying(false);
   };
+
+  // Reset selection on a new job; load subtitle presets once clips exist.
+  useEffect(() => {
+    setSelected(new Set());
+    setBatch({ running: false, done: 0, total: 0, stage: '', error: '' });
+  }, [jobId]);
+  useEffect(() => {
+    if (results?.clips?.length) {
+      listPresets().then(ps => setSubtitlePresets(ps.filter(p => p.kind === 'subtitle'))).catch(() => {});
+    }
+  }, [results?.clips?.length]);
+
+  const clipCount = results?.clips?.length || 0;
+  const toggleSelected = (index) => setSelected(prev => {
+    const next = new Set(prev);
+    if (next.has(index)) next.delete(index); else next.add(index);
+    return next;
+  });
+  const toggleSelectAll = () => setSelected(prev =>
+    prev.size === clipCount ? new Set() : new Set(Array.from({ length: clipCount }, (_, i) => i))
+  );
+
+  // Sequentially drive each selected card through its edits (the renderer is a
+  // single service — sequential avoids overloading it). Cancellable mid-run.
+  const runBatch = async ({ subtitleSettings, doHook, doAutoEdit }) => {
+    const indices = Array.from(selected).sort((a, b) => a - b);
+    if (indices.length === 0) return;
+    const controller = new AbortController();
+    batchAbortRef.current = controller;
+    setBatch({ running: true, done: 0, total: indices.length, stage: '', error: '' });
+    let done = 0;
+    try {
+      for (const idx of indices) {
+        if (controller.signal.aborted) break;
+        setBatch(b => ({ ...b, stage: `Rendering clip ${idx + 1} (${done + 1}/${indices.length})…` }));
+        const card = cardRefs.current[idx];
+        if (card && card.applyEdits) {
+          await card.applyEdits({ subtitleSettings, doHook, doAutoEdit, signal: controller.signal });
+        }
+        done += 1;
+        setBatch(b => ({ ...b, done }));
+      }
+      setBatch({ running: false, done, total: indices.length, stage: '', error: controller.signal.aborted ? 'Cancelled.' : '' });
+    } catch (e) {
+      setBatch({ running: false, done, total: indices.length, stage: '', error: e.name === 'AbortError' ? 'Cancelled.' : (e.message || 'Batch failed') });
+    } finally {
+      batchAbortRef.current = null;
+    }
+  };
+  const cancelBatch = () => { if (batchAbortRef.current) batchAbortRef.current.abort(); };
+
+  // Zip the selected clips' current (latest edited) files server-side, download once.
+  const downloadSelectedZip = async () => {
+    const indices = Array.from(selected).sort((a, b) => a - b);
+    if (indices.length === 0) return;
+    const items = [];
+    for (const idx of indices) {
+      const card = cardRefs.current[idx];
+      const filename = card?.getCurrentFilename?.();
+      if (filename) items.push({ filename, name: clipDownloadName(results.clips[idx]) });
+    }
+    if (items.length === 0) {
+      setBatch(b => ({ ...b, error: 'Selected clips have no file to download yet.' }));
+      return;
+    }
+    try {
+      const res = await fetch(getApiUrl('/api/batch/download'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId, items }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'openshorts_clips.zip';
+      document.body.appendChild(a); a.click();
+      window.URL.revokeObjectURL(url); document.body.removeChild(a);
+    } catch (e) {
+      setBatch(b => ({ ...b, error: 'Download failed: ' + e.message }));
+    }
+  };
+
+  // Keep a stable timestamp per log line: only assign a time to newly-seen
+  // indices, and rebuild if the log list was reset/shrunk (new job).
+  useEffect(() => {
+    setLogTimes(prev => {
+      if (logs.length === prev.length) return prev;
+      const now = new Date().toLocaleTimeString();
+      if (logs.length < prev.length) {
+        return logs.map((_, i) => prev[i] || now);
+      }
+      const next = prev.slice();
+      for (let i = prev.length; i < logs.length; i++) next.push(now);
+      return next;
+    });
+  }, [logs]);
 
   // Session Recovery: Restore on mount
   useEffect(() => {
@@ -220,7 +357,8 @@ function App() {
         jobId,
         status,
         results,
-        processingMedia: processingMedia?.type === 'url' ? processingMedia : null,
+        // A File object can't be serialized; a URL or a server-side path can.
+        processingMedia: ['url', 'local'].includes(processingMedia?.type) ? processingMedia : null,
         activeTab,
         timestamp: Date.now()
       };
@@ -228,7 +366,10 @@ function App() {
     } catch (e) {
       // localStorage full or serialization error - ignore
     }
-  }, [jobId, status, results, activeTab]);
+    // processingMedia MUST be a dependency: it is persisted above, so if it is
+    // omitted the saved session can keep an old video while a newer job runs,
+    // and the stale clip is restored under the effects on the next page load.
+  }, [jobId, status, results, activeTab, processingMedia]);
 
   useEffect(() => {
     // Encrypt Gemini Key too for consistency if desired, but user asked specifically about Social integration not saving well.
@@ -256,6 +397,11 @@ function App() {
       localStorage.setItem('falKey_v1', encrypt(falKey));
     }
   }, [falKey]);
+
+  useEffect(() => {
+    if (bufferKey) localStorage.setItem('bufferKey_v1', encrypt(bufferKey));
+    else localStorage.removeItem('bufferKey_v1');
+  }, [bufferKey]);
 
   useEffect(() => {
     if (uploadPostKey && userProfiles.length === 0) {
@@ -288,6 +434,9 @@ function App() {
             // Update logs if available
             if (data.logs) setLogs(data.logs);
           }
+
+          // "Part 12/40" for a long split run.
+          setProgress(data.progress || null);
         } catch (e) {
           console.error("Polling error", e);
         }
@@ -321,7 +470,10 @@ function App() {
   };
 
   const handleProcess = async (data) => {
-    if (!apiKey || !uploadPostKey) {
+    const needsGemini = (data.clipMode || 'viral') !== 'split';
+    // Publishing goes through Buffer now, so the Upload-Post key is optional
+    // (only the Thumbnail/SaaS flows use it). Only gate on Gemini for viral mode.
+    if (needsGemini && !apiKey) {
       setShowKeyModal(true);
       return;
     }
@@ -334,19 +486,28 @@ function App() {
       let body;
       const headers = { 'X-Gemini-Key': apiKey };
 
-      if (data.type === 'url') {
+      if (data.type === 'url' || data.type === 'local') {
         headers['Content-Type'] = 'application/json';
-        body = JSON.stringify({ url: data.payload, acknowledged: !!data.acknowledged });
+        body = JSON.stringify({
+          ...(data.type === 'url' ? { url: data.payload } : { local_path: data.payload }),
+          acknowledged: !!data.acknowledged,
+          split_parts: data.clipMode === 'split',
+          part_length: data.partLength || 60,
+          layout: data.layout || 'auto',
+        });
       } else {
         const formData = new FormData();
         formData.append('file', data.payload);
         formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
+        formData.append('split_parts', data.clipMode === 'split' ? 'true' : 'false');
+        formData.append('part_length', String(data.partLength || 60));
+        formData.append('layout', data.layout || 'auto');
         body = formData;
       }
 
       const res = await fetch(getApiUrl('/api/process'), {
         method: 'POST',
-        headers: data.type === 'url' ? headers : { 'X-Gemini-Key': apiKey },
+        headers: (data.type === 'url' || data.type === 'local') ? headers : { 'X-Gemini-Key': apiKey },
         body
       });
 
@@ -360,12 +521,59 @@ function App() {
     }
   };
 
+  const handlePlan = async (data) => {
+    setPlanBusy(true);
+    setPlanError('');
+    try {
+      const res = await fetch(getApiUrl('/api/split/plan'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          local_path: data.localPath,
+          part_length: data.partLength || 180,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const planData = await res.json();
+      setPlan({ ...planData, layout: data.layout || 'auto' });
+    } catch (e) {
+      setPlanError(e.message || 'Could not read that file.');
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+
+  const handleRenderPlan = async (payload) => {
+    setStatus('processing');
+    setLogs(["Starting render of " + payload.parts.length + " parts..."]);
+    setResults(null);
+    setProgress(null);
+    setProcessingMedia({ type: 'local', payload: payload.local_path });
+    try {
+      const res = await fetch(getApiUrl('/api/process'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Gemini-Key': apiKey },
+        body: JSON.stringify({ ...payload, acknowledged: true, split_parts: true }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const resData = await res.json();
+      setPlan(null);
+      setJobId(resData.job_id);
+    } catch (e) {
+      setStatus('error');
+      setLogs(l => [...l, `Error starting job: ${e.message}`]);
+    }
+  };
+
   const handleReset = () => {
     setStatus('idle');
     setJobId(null);
     setResults(null);
     setLogs([]);
     setProcessingMedia(null);
+    setPlan(null);
+    setPlanError('');
+    setProgress(null);
     localStorage.removeItem(SESSION_KEY);
   };
 
@@ -390,11 +598,11 @@ function App() {
         </button>
 
         <button
-          onClick={() => setActiveTab('saasshorts')}
-          className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors ${activeTab === 'saasshorts' ? 'bg-violet-500/10 text-violet-400' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
+          onClick={() => setActiveTab('clips')}
+          className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors ${activeTab === 'clips' ? 'bg-violet-500/10 text-violet-400' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
         >
-          <Sparkles size={20} />
-          <span className="font-medium hidden lg:block">AI Shorts</span>
+          <Scissors size={20} />
+          <span className="font-medium hidden lg:block">Clips</span>
         </button>
 
         <button
@@ -419,6 +627,22 @@ function App() {
         >
           <Image size={20} />
           <span className="font-medium hidden lg:block">YouTube Studio</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('explainer')}
+          className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors ${activeTab === 'explainer' ? 'bg-cyan-500/10 text-cyan-400' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
+        >
+          <FlaskConical size={20} />
+          <span className="font-medium hidden lg:block">Explainer</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('publishing')}
+          className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors ${activeTab === 'publishing' ? 'bg-sky-500/10 text-sky-400' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
+        >
+          <Send size={20} />
+          <span className="font-medium hidden lg:block">Publishing</span>
         </button>
 
         {/* <button
@@ -503,36 +727,28 @@ function App() {
               />
             )}
 
-            {(!apiKey || !uploadPostKey) && (
+            {!apiKey && (
               <button
                 onClick={() => setActiveTab('settings')}
                 className="text-xs text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 px-3 py-1 rounded-full border border-amber-500/30 transition-colors flex items-center gap-1.5"
                 title="Click to configure your API keys"
               >
                 <AlertTriangle size={12} />
-                {!apiKey && !uploadPostKey
-                  ? 'Gemini & Upload-Post keys missing'
-                  : !apiKey
-                    ? 'Gemini API Key Missing'
-                    : 'Upload-Post API Key Missing'}
+                Gemini API Key Missing
               </button>
             )}
           </div>
         </header>
 
         {/* Persistent Missing Keys Banner — visible on every screen */}
-        {(!apiKey || !uploadPostKey) && activeTab !== 'settings' && (
+        {!apiKey && activeTab !== 'settings' && (
           <div className="mx-6 mt-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center justify-between gap-4 shrink-0 animate-[fadeIn_0.3s_ease-out]">
             <div className="flex items-center gap-3 text-sm text-amber-200">
               <KeyRound size={16} className="shrink-0 text-amber-400" />
               <div>
-                <span className="font-semibold">Required API keys missing.</span>{' '}
+                <span className="font-semibold">Gemini API key missing.</span>{' '}
                 <span className="text-amber-200/80">
-                  {!apiKey && !uploadPostKey
-                    ? 'Set your Gemini and Upload-Post API keys to use OpenShorts.'
-                    : !apiKey
-                      ? 'Set your Gemini API key to use OpenShorts.'
-                      : 'Set your Upload-Post API key to use OpenShorts.'}
+                  Set your Gemini API key to use AI clip detection.
                 </span>
               </div>
             </div>
@@ -573,14 +789,14 @@ function App() {
               </div>
               <KeyInput onKeySet={setApiKey} savedKey={apiKey} />
 
-              <div className={`glass-panel p-6 mt-8 ${!uploadPostKey ? 'border-amber-500/30 ring-1 ring-amber-500/20' : ''}`}>
+              <div className="glass-panel p-6 mt-8">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-lg font-semibold">Social Integration</h2>
-                  <span className="text-[10px] bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded text-amber-400 uppercase tracking-wider">Required</span>
+                  <span className="text-[10px] bg-white/5 border border-white/10 px-2 py-0.5 rounded text-zinc-400 uppercase tracking-wider">Optional</span>
                 </div>
                 <p className="text-xs text-zinc-500 mb-6 leading-relaxed">
-                  Required to publish your clips to TikTok, Instagram Reels, and YouTube Shorts via <strong>Upload-Post</strong>.
-                  Includes a <strong>free tier</strong> (no credit card required).
+                  Optional — publishing now runs through <strong>Buffer</strong>. An <strong>Upload-Post</strong> key
+                  is only needed for the legacy Thumbnail/UGC one-click publish flows. Leave it blank if you don't use those.
                 </p>
                 <div className="space-y-4">
                   <label className="block text-sm text-zinc-400">Upload-Post API Key</label>
@@ -617,6 +833,24 @@ function App() {
                       Keys are only stored in your browser. They are sent to the backend only to process your request, never stored server-side.
                     </span>
                   </p>
+
+                  <div className="pt-5 mt-1 border-t border-white/10">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-sm text-zinc-300 font-medium">Buffer API Key <span className="text-[10px] text-zinc-600 font-normal">— powers the Post button</span></label>
+                      {bufferKey && <span className="text-[10px] text-green-400">— set</span>}
+                    </div>
+                    <input
+                      type="password"
+                      value={bufferKey}
+                      onChange={(e) => setBufferKey(e.target.value.trim())}
+                      className="input-field"
+                      placeholder="Buffer personal API key"
+                    />
+                    <p className="text-xs text-zinc-500 mt-2 leading-relaxed">
+                      Posts your clips to your Buffer <strong>queue</strong> (TikTok / Instagram Reels / YouTube).
+                      Get it at <a href="https://publish.buffer.com/settings/api" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">publish.buffer.com/settings/api</a>.
+                    </p>
+                  </div>
                 </div>
               </div>
 
@@ -724,9 +958,21 @@ function App() {
             </div>
           )}
 
-          {/* View: SaaS Shorts */}
-          {activeTab === 'saasshorts' && (
-            <SaaShortsTab geminiApiKey={apiKey} elevenLabsKey={elevenLabsKey} falKey={falKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} />
+          {/* View: Clips lane — one long video -> many standalone Shorts. Replaced
+              the AI Shorts (UGC) tab, which is no longer used. SaaShortsTab.jsx and
+              its /api/saasshorts routes are still in the tree, just unmounted. */}
+          {activeTab === 'clips' && (
+            <Suspense fallback={<TabLoading />}><ClipsTab /></Suspense>
+          )}
+
+          {/* View: Publishing — the shared Buffer calendar for every lane */}
+          {activeTab === 'publishing' && (
+            <Suspense fallback={<TabLoading />}><PublishingTab /></Suspense>
+          )}
+
+          {/* View: Explainer lane */}
+          {activeTab === 'explainer' && (
+            <Suspense fallback={<TabLoading />}><ExplainerTab /></Suspense>
           )}
 
           {/* View: AI Agent */}
@@ -847,12 +1093,14 @@ function App() {
 
           {/* View: UGC Gallery */}
           {activeTab === 'ugc-gallery' && (
-            <UGCGallery />
+            <Suspense fallback={<TabLoading />}><UGCGallery /></Suspense>
           )}
 
           {/* View: Thumbnails */}
           {activeTab === 'thumbnails' && (
-            <ThumbnailStudio geminiApiKey={apiKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} />
+            <Suspense fallback={<TabLoading />}>
+              <ThumbnailStudio geminiApiKey={apiKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} />
+            </Suspense>
           )}
 
           {/* View: Gallery */}
@@ -860,8 +1108,22 @@ function App() {
             <Gallery />
           )} */}
 
+          {/* View: Split planner (approve the parts before rendering) */}
+          {activeTab === 'dashboard' && status === 'idle' && plan && (
+            <div className="h-full overflow-y-auto custom-scrollbar p-6">
+              <div className="max-w-6xl mx-auto">
+                <SplitPlanner
+                  plan={plan}
+                  layout={plan.layout}
+                  onBack={() => setPlan(null)}
+                  onRender={handleRenderPlan}
+                />
+              </div>
+            </div>
+          )}
+
           {/* View: Dashboard (Idle) */}
-          {activeTab === 'dashboard' && status === 'idle' && (
+          {activeTab === 'dashboard' && status === 'idle' && !plan && (
             <div className="h-full flex flex-col items-center justify-center p-6 animate-[fadeIn_0.3s_ease-out]">
               <div className="max-w-xl w-full text-center space-y-8">
                 <div className="space-y-4">
@@ -873,7 +1135,20 @@ function App() {
                   </p>
                 </div>
 
-                <MediaInput onProcess={handleProcess} isProcessing={status === 'processing'} />
+                <MediaInput
+                  onProcess={handleProcess}
+                  onPlan={handlePlan}
+                  isProcessing={status === 'processing' || planBusy}
+                />
+
+                {planBusy && (
+                  <p className="text-sm text-zinc-400">Reading the file and laying out the parts…</p>
+                )}
+                {planError && (
+                  <div className="bg-red-500/10 border border-red-500/30 text-red-300 text-sm rounded-xl px-4 py-3 text-left">
+                    {planError}
+                  </div>
+                )}
 
                 <div className="flex items-center justify-center gap-8 text-zinc-500 text-sm">
                   <span className="flex items-center gap-2"><Youtube size={16} /> YouTube</span>
@@ -900,6 +1175,9 @@ function App() {
                       'bg-red-500/10 border-red-500/20 text-red-400'
                     }`}>
                     {status.toUpperCase()}
+                    {status === 'processing' && progress && progress.total > 1 && (
+                      <span className="ml-2 text-zinc-300">part {progress.current}/{progress.total}</span>
+                    )}
                   </span>
                 </div>
 
@@ -928,7 +1206,7 @@ function App() {
                     <div className="flex-1 p-4 overflow-y-auto font-mono text-xs space-y-1.5 custom-scrollbar text-zinc-400">
                       {logs.map((log, i) => (
                         <div key={i} className={`flex gap-2 ${log.toLowerCase().includes('error') ? 'text-red-400' : 'text-zinc-400'}`}>
-                          <span className="text-zinc-700 shrink-0">{new Date().toLocaleTimeString()}</span>
+                          <span className="text-zinc-700 shrink-0">{logTimes[i] || ''}</span>
                           <span>{log}</span>
                         </div>
                       ))}
@@ -968,22 +1246,39 @@ function App() {
 
                 <div className="flex-1 overflow-y-auto custom-scrollbar p-1">
                   {results && results.clips && results.clips.length > 0 ? (
+                    <>
+                    <BatchBar
+                      selectedCount={selected.size}
+                      totalCount={results.clips.length}
+                      onToggleSelectAll={toggleSelectAll}
+                      subtitlePresets={subtitlePresets}
+                      batch={batch}
+                      onApply={runBatch}
+                      onDownload={downloadSelectedZip}
+                      onCancel={cancelBatch}
+                    />
                     <div className={`grid gap-4 pb-10 ${status === 'complete' ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1'}`}>
                       {results.clips.map((clip, i) => (
                         <ResultCard
                           key={i}
+                          ref={(el) => { cardRefs.current[i] = el; }}
                           clip={clip}
                           index={i}
                           jobId={jobId}
                           uploadPostKey={uploadPostKey}
                           uploadUserId={uploadUserId}
+                          bufferKey={bufferKey}
                           geminiApiKey={apiKey}
                           elevenLabsKey={elevenLabsKey}
                           onPlay={(time) => handleClipPlay(time)}
                           onPause={handleClipPause}
+                          selectable={true}
+                          selected={selected.has(i)}
+                          onToggleSelected={toggleSelected}
                         />
                       ))}
                     </div>
+                    </>
                   ) : (
                     status === 'processing' ? (
                       <div className="h-full flex flex-col items-center justify-center text-zinc-500 space-y-4 opacity-50">
@@ -1010,15 +1305,9 @@ function App() {
       {showKeyModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowKeyModal(false)}>
           <div className="bg-[#18181b] border border-white/10 rounded-2xl p-6 max-w-md w-full mx-4 space-y-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-lg font-bold text-white">
-              {!apiKey && !uploadPostKey
-                ? 'Required API Keys Missing'
-                : !apiKey
-                  ? 'Gemini API Key Required'
-                  : 'Upload-Post API Key Required'}
-            </h2>
+            <h2 className="text-lg font-bold text-white">Gemini API Key Required</h2>
             <p className="text-sm text-zinc-400">
-              OpenShorts needs both a <strong className="text-zinc-200">Gemini</strong> API key and an <strong className="text-zinc-200">Upload-Post</strong> API key. Both have free tiers.
+              OpenShorts needs a <strong className="text-zinc-200">Gemini</strong> API key for AI clip detection. It has a free tier.
             </p>
 
             {/* Gemini block */}
@@ -1042,37 +1331,6 @@ function App() {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && e.target.value.trim()) {
                         setApiKey(e.target.value.trim());
-                      }
-                    }}
-                  />
-                </>
-              )}
-            </div>
-
-            {/* Upload-Post block */}
-            <div className={`rounded-lg p-4 space-y-2 border ${!uploadPostKey ? 'bg-violet-500/5 border-violet-500/30' : 'bg-white/5 border-white/10 opacity-70'}`}>
-              <p className="text-xs font-semibold text-zinc-200 flex items-center gap-2">
-                {uploadPostKey ? <Check size={12} className="text-green-400" /> : <AlertTriangle size={12} className="text-amber-400" />}
-                Upload-Post API Key {uploadPostKey && <span className="text-green-400">— set</span>}
-              </p>
-              {!uploadPostKey && (
-                <>
-                  <p className="text-xs text-zinc-400">
-                    Required to publish your clips to TikTok, Instagram Reels, and YouTube Shorts. Free tier available, no credit card needed.
-                  </p>
-                  <ol className="text-xs text-zinc-400 space-y-1 list-decimal list-inside">
-                    <li>Register at <a href="https://app.upload-post.com/login" target="_blank" rel="noopener noreferrer" className="text-violet-400 underline">app.upload-post.com</a></li>
-                    <li>Connect your TikTok, Instagram, or YouTube accounts</li>
-                    <li>Go to <a href="https://app.upload-post.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-violet-400 underline">API Keys</a> and generate one</li>
-                    <li>Paste it below</li>
-                  </ol>
-                  <input
-                    type="text"
-                    placeholder="Paste your Upload-Post API key here..."
-                    className="w-full bg-black/50 border border-white/20 rounded-lg px-4 py-2.5 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-violet-500"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && e.target.value.trim()) {
-                        setUploadPostKey(e.target.value.trim());
                       }
                     }}
                   />

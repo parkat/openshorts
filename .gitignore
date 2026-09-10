@@ -26,6 +26,7 @@ output/
 
 # Secrets
 .env
+*.env
 
 # Generated metadata
 *_metadata.json
@@ -40,3 +41,18 @@ output/
 skills/
 skills-lock.json
 
+# NVIDIA/CUDA compute cache (created by the GPU container)
+.nv/
+# Local archive of expired clips (host-side; path set via ARCHIVE_HOST_DIR)
+archive/
+
+
+# Remotion render output (smoke tests, local previews)
+remotion/out/
+
+# Real artifacts extracted from the video chain (infra-chain piece)
+chain-artifacts/
+
+# Large local sources picked by the dashboard Server File tab
+media/*
+!media/README.md

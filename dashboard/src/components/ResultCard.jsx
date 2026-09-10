@@ -1,12 +1,16 @@
-import React, { useState, useEffect } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, CheckCircle, AlertCircle, X, Loader2, Copy, Wand2, Type, Calendar, Clock, Languages } from 'lucide-react';
+import React, { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
+import { Download, Share2, Instagram, Youtube, Video, CheckCircle, AlertCircle, X, Loader2, Copy, Wand2, Type, Calendar, Clock, Languages, Crop, MessageSquare, Check } from 'lucide-react';
 import { getApiUrl } from '../config';
 import SubtitleModal from './SubtitleModal';
 import HookModal from './HookModal';
+import CropModal from './CropModal';
 import TranslateModal from './TranslateModal';
+import ScriptChatModal from './ScriptChatModal';
 import { renderInBrowser } from '../lib/renderInBrowser';
+import { buildSubtitleConfig, fetchClipCaptions } from '../lib/subtitleConfig';
+import { clipDownloadName } from '../lib/downloadName';
 
-export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, onPlay, onPause }) {
+const ResultCard = forwardRef(function ResultCard({ clip, index, jobId, uploadPostKey, uploadUserId, bufferKey, geminiApiKey, elevenLabsKey, onPlay, onPause, selectable = false, selected = false, onToggleSelected }, ref) {
     const [showModal, setShowModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
     const videoRef = React.useRef(null);
@@ -26,18 +30,103 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
     const [posting, setPosting] = useState(false);
     const [postResult, setPostResult] = useState(null);
 
+    // Buffer posting (main Post flow)
+    const [bufferChannels, setBufferChannels] = useState([]);
+    const [channelsLoading, setChannelsLoading] = useState(false);
+    const [selectedChannels, setSelectedChannels] = useState(() => new Set());
+    const [channelCaptions, setChannelCaptions] = useState({});
+
     const [isEditing, setIsEditing] = useState(false);
     const [isSubtitling, setIsSubtitling] = useState(false);
     const [isHooking, setIsHooking] = useState(false);
     const [isTranslating, setIsTranslating] = useState(false);
     const [showHookModal, setShowHookModal] = useState(false);
     const [showTranslateModal, setShowTranslateModal] = useState(false);
+    const [showCropModal, setShowCropModal] = useState(false);
+    const [showScriptChat, setShowScriptChat] = useState(false);
     const [editError, setEditError] = useState(null);
 
     const [clipDuration, setClipDuration] = useState(clip.end && clip.start ? clip.end - clip.start : 30);
 
     // Accumulate Remotion layers across operations
     const [activeLayers, setActiveLayers] = useState({ subtitles: null, hook: null, effects: null });
+
+    // Mirror mutable state into refs so the imperative batch handle reads fresh
+    // values (the parent calls these outside React's render/closure cycle).
+    const activeLayersRef = useRef(activeLayers);
+    useEffect(() => { activeLayersRef.current = activeLayers; }, [activeLayers]);
+    const currentUrlRef = useRef(currentVideoUrl);
+    useEffect(() => { currentUrlRef.current = currentVideoUrl; }, [currentVideoUrl]);
+    const clipDurationRef = useRef(clipDuration);
+    useEffect(() => { clipDurationRef.current = clipDuration; }, [clipDuration]);
+
+    const filenameFromUrl = (url) => {
+        if (!url) return null;
+        const clean = url.split('?')[0];
+        const m = clean.match(/\/videos\/[^/]+\/(.+)$/);
+        return decodeURIComponent(m ? m[1] : clean.split('/').pop());
+    };
+
+    // Imperative API driven by the batch runner in App.jsx. Applies the requested
+    // edits as composed layers and renders them together once (server-side).
+    const applyEdits = async ({ subtitleSettings = null, doHook = false, doAutoEdit = false, signal } = {}) => {
+        setIsSubtitling(true);
+        setEditError(null);
+        try {
+            const layers = { ...activeLayersRef.current };
+
+            if (doAutoEdit) {
+                const apiKey = geminiApiKey || localStorage.getItem('gemini_key');
+                if (apiKey) {
+                    const res = await fetch(getApiUrl('/api/effects/generate'), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-Gemini-Key': apiKey },
+                        body: JSON.stringify({ job_id: jobId, clip_index: index, input_filename: filenameFromUrl(currentUrlRef.current) }),
+                        signal,
+                    });
+                    if (res.ok) {
+                        const d = await res.json();
+                        if (d.effects && d.effects.segments) layers.effects = d.effects;
+                    }
+                }
+            }
+
+            if (subtitleSettings) {
+                const { captions } = await fetchClipCaptions(getApiUrl, jobId, index);
+                layers.subtitles = buildSubtitleConfig(subtitleSettings, captions);
+            }
+
+            if (doHook && clip.viral_hook_text) {
+                layers.hook = { text: clip.viral_hook_text, position: 'top', size: 'M', entranceAnimation: 'spring', displayDurationSec: 5 };
+            }
+
+            const url = await renderInBrowser({
+                videoUrl: originalVideoUrl,
+                durationInSeconds: clipDurationRef.current,
+                subtitles: layers.subtitles,
+                hook: layers.hook,
+                effects: layers.effects,
+                jobId, clipIndex: index, signal,
+            });
+            setActiveLayers(layers);
+            setCurrentVideoUrl(url);
+            if (videoRef.current) videoRef.current.load();
+            return { ok: true };
+        } catch (e) {
+            if (e.name === 'AbortError') throw e;
+            setEditError(e.message);
+            setTimeout(() => setEditError(null), 5000);
+            return { ok: false, error: e.message };
+        } finally {
+            setIsSubtitling(false);
+        }
+    };
+
+    useImperativeHandle(ref, () => ({
+        applyEdits,
+        getCurrentFilename: () => filenameFromUrl(currentUrlRef.current),
+        getTitle: () => clip.video_title_for_youtube_short || `clip-${index + 1}`,
+    }));
 
     // Fetch clip duration from transcript endpoint
     useEffect(() => {
@@ -96,6 +185,8 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                         subtitles: newLayers.subtitles,
                         hook: newLayers.hook,
                         effects: newLayers.effects,
+                        jobId,
+                        clipIndex: index,
                     });
                     setCurrentVideoUrl(blobUrl);
                     if (videoRef.current) videoRef.current.load();
@@ -157,6 +248,8 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                     subtitles: newLayers.subtitles,
                     hook: newLayers.hook,
                     effects: newLayers.effects,
+                    jobId,
+                    clipIndex: index,
                 });
                 setCurrentVideoUrl(blobUrl);
                 if (videoRef.current) videoRef.current.load();
@@ -172,6 +265,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                     job_id: jobId,
                     clip_index: index,
                     position: options.position,
+                    margin_v: options.margin_v,
                     font_size: options.fontSize,
                     font_name: options.fontName,
                     font_color: options.fontColor,
@@ -212,6 +306,8 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                     subtitles: newLayers.subtitles,
                     hook: newLayers.hook,
                     effects: newLayers.effects,
+                    jobId,
+                    clipIndex: index,
                 });
                 setCurrentVideoUrl(blobUrl);
                 if (videoRef.current) videoRef.current.load();
@@ -382,8 +478,79 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
         }
     };
 
+    // ---- Buffer posting (main Post flow) ----
+    const serviceIcon = (svc) => {
+        if (svc === 'tiktok') return <Video size={16} className="text-cyan-400" />;
+        if (svc === 'instagram') return <Instagram size={16} className="text-pink-400" />;
+        if (svc === 'youtube') return <Youtube size={16} className="text-red-400" />;
+        return <Share2 size={16} className="text-zinc-400" />;
+    };
+    const toggleChannel = (id) => setSelectedChannels(prev => {
+        const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n;
+    });
+    const defaultCaptionFor = (svc) => {
+        if (svc === 'tiktok') return clip.video_description_for_tiktok || clip.video_description_for_instagram || '';
+        if (svc === 'instagram') return clip.video_description_for_instagram || clip.video_description_for_tiktok || '';
+        return clip.video_description_for_instagram || clip.video_description_for_tiktok || ''; // youtube description
+    };
+
+    // Load the account's Buffer channels when the Post modal opens.
+    useEffect(() => {
+        if (!showModal || !bufferKey) return;
+        setChannelsLoading(true);
+        fetch(getApiUrl('/api/buffer/channels'), { headers: { 'X-Buffer-Key': bufferKey } })
+            .then(async r => { if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || 'Failed to load channels'); return r.json(); })
+            .then(d => {
+                const chans = d.channels || [];
+                setBufferChannels(chans);
+                setSelectedChannels(new Set(chans.map(c => c.id)));
+                const caps = {}; chans.forEach(c => { caps[c.id] = defaultCaptionFor(c.service); });
+                setChannelCaptions(caps);
+            })
+            .catch(e => { setBufferChannels([]); setPostResult({ success: false, msg: e.message }); })
+            .finally(() => setChannelsLoading(false));
+    }, [showModal, bufferKey]);
+
+    const handleBufferPost = async () => {
+        if (!bufferKey) { setPostResult({ success: false, msg: 'Add your Buffer API key in Settings.' }); return; }
+        const chosen = bufferChannels.filter(c => selectedChannels.has(c.id));
+        if (chosen.length === 0) { setPostResult({ success: false, msg: 'Select at least one channel.' }); return; }
+        if (isScheduling && !scheduleDate) { setPostResult({ success: false, msg: 'Pick a date and time.' }); return; }
+        setPosting(true); setPostResult(null);
+        try {
+            const body = {
+                job_id: jobId, clip_index: index,
+                filename: filenameFromUrl(currentUrlRef.current),
+                title: postTitle,
+                channels: chosen.map(c => ({ id: c.id, service: c.service, text: channelCaptions[c.id] || '' })),
+                schedule_iso: isScheduling && scheduleDate ? new Date(scheduleDate).toISOString() : null,
+                scheduling: 'automatic',
+            };
+            const res = await fetch(getApiUrl('/api/buffer/post'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Buffer-Key': bufferKey },
+                body: JSON.stringify(body),
+            });
+            if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || await res.text());
+            const data = await res.json();
+            const ok = (data.results || []).filter(r => r.ok).map(r => r.service);
+            const bad = (data.results || []).filter(r => !r.ok);
+            const verb = isScheduling ? 'Scheduled' : 'Queued';
+            if (bad.length === 0) {
+                setPostResult({ success: true, msg: `${verb} on Buffer: ${ok.join(', ')}` });
+                setTimeout(() => { setShowModal(false); setPostResult(null); }, 3500);
+            } else {
+                setPostResult({ success: ok.length > 0, msg: `${ok.length ? `${verb}: ${ok.join(', ')}. ` : ''}Failed: ${bad.map(b => `${b.service} (${b.error})`).join('; ')}` });
+            }
+        } catch (e) {
+            setPostResult({ success: false, msg: `Failed: ${e.message}` });
+        } finally {
+            setPosting(false);
+        }
+    };
+
     return (
-        <div className="bg-surface border border-white/5 rounded-2xl overflow-hidden flex flex-col md:flex-row group hover:border-white/10 transition-all animate-[fadeIn_0.5s_ease-out] min-h-[300px] h-auto" style={{ animationDelay: `${index * 0.1}s` }}>
+        <div className={`bg-surface border rounded-2xl overflow-hidden flex flex-col md:flex-row group transition-all animate-[fadeIn_0.5s_ease-out] min-h-[300px] h-auto ${selected ? 'border-primary ring-2 ring-primary/60' : 'border-white/5 hover:border-white/10'}`} style={{ animationDelay: `${index * 0.1}s` }}>
             {/* Left: Video Preview (Responsive Width) */}
             <div className="w-full md:w-[180px] lg:w-[200px] bg-black relative shrink-0 aspect-[9/16] md:aspect-auto group/video">
                 <video
@@ -409,6 +576,18 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                         Clip {index + 1}
                     </span>
                 </div>
+
+                {/* Batch selection checkbox */}
+                {selectable && (
+                    <button
+                        onClick={(e) => { e.stopPropagation(); onToggleSelected && onToggleSelected(index); }}
+                        className={`absolute top-3 right-3 z-20 w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${selected ? 'bg-primary border-primary text-white' : 'bg-black/50 border-white/50 text-transparent hover:border-white'}`}
+                        title={selected ? 'Deselect clip' : 'Select clip'}
+                        aria-pressed={selected}
+                    >
+                        <Check size={14} strokeWidth={3} />
+                    </button>
+                )}
 
                 {/* Auto Edit Overlay if Processing */}
                 {isEditing && (
@@ -506,6 +685,20 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                     </button>
 
                     <button
+                        onClick={() => setShowCropModal(true)}
+                        className="col-span-1 py-2 bg-gradient-to-r from-sky-600 to-cyan-600 hover:from-sky-500 hover:to-cyan-500 text-white rounded-lg text-xs font-bold shadow-lg shadow-sky-500/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2 mb-1 truncate px-1"
+                    >
+                        <Crop size={14} /> Adjust Crop
+                    </button>
+
+                    <button
+                        onClick={() => setShowScriptChat(true)}
+                        className="col-span-1 py-2 bg-gradient-to-r from-fuchsia-600 to-indigo-600 hover:from-fuchsia-500 hover:to-indigo-500 text-white rounded-lg text-xs font-bold shadow-lg shadow-fuchsia-500/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2 mb-1 truncate px-1"
+                    >
+                        <MessageSquare size={14} className="shrink-0" /> AI Copy
+                    </button>
+
+                    <button
                         onClick={() => setShowModal(true)}
                         className="col-span-1 py-2 bg-primary hover:bg-blue-600 text-white rounded-lg text-xs font-bold shadow-lg shadow-primary/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2 truncate px-2"
                     >
@@ -522,7 +715,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                                 const a = document.createElement('a');
                                 a.style.display = 'none';
                                 a.href = url;
-                                a.download = `clip-${index + 1}.mp4`;
+                                a.download = clipDownloadName(clip);
                                 document.body.appendChild(a);
                                 a.click();
                                 window.URL.revokeObjectURL(url);
@@ -550,54 +743,76 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                             <X size={20} />
                         </button>
 
-                        <h3 className="text-lg font-bold text-white mb-4">Post / Schedule</h3>
+                        <h3 className="text-lg font-bold text-white mb-1">Post to Buffer</h3>
+                        <p className="text-xs text-zinc-500 mb-4">Adds this clip to your Buffer queue.</p>
 
-                        {!uploadPostKey && (
+                        {!bufferKey ? (
                             <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/20 text-yellow-200 text-xs rounded-lg flex items-start gap-2">
                                 <AlertCircle size={14} className="mt-0.5 shrink-0" />
-                                <div>Configure API Key in Settings first.</div>
+                                <div>Add your Buffer API key in Settings to enable posting.</div>
                             </div>
-                        )}
-
+                        ) : (
                         <div className="space-y-4 mb-6">
-                            {/* Title & Description */}
+                            {/* YouTube title */}
                             <div>
-                                <label className="block text-xs font-bold text-zinc-400 mb-1">Video Title</label>
+                                <label className="block text-xs font-bold text-zinc-400 mb-1">Title <span className="text-zinc-600 font-normal">(YouTube)</span></label>
                                 <input
                                     type="text"
                                     value={postTitle}
                                     onChange={(e) => setPostTitle(e.target.value)}
                                     className="w-full bg-black/40 border border-white/10 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-primary/50 placeholder-zinc-600"
-                                    placeholder="Enter a catchy title..."
+                                    placeholder="Video title..."
                                 />
                             </div>
 
+                            {/* Channels + per-channel captions */}
                             <div>
-                                <label className="block text-xs font-bold text-zinc-400 mb-1">Caption / Description</label>
-                                <textarea
-                                    value={postDescription}
-                                    onChange={(e) => setPostDescription(e.target.value)}
-                                    rows={4}
-                                    className="w-full bg-black/40 border border-white/10 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-primary/50 placeholder-zinc-600 resize-none"
-                                    placeholder="Write a caption for your post..."
-                                />
+                                <label className="block text-xs font-bold text-zinc-400 mb-2">Channels</label>
+                                {channelsLoading ? (
+                                    <div className="flex items-center gap-2 text-zinc-400 text-sm p-2"><Loader2 size={14} className="animate-spin" /> Loading your Buffer channels…</div>
+                                ) : bufferChannels.length === 0 ? (
+                                    <div className="text-xs text-zinc-500 p-2">No channels found — connect channels in Buffer, or check your API key.</div>
+                                ) : (
+                                    <div className="space-y-2">
+                                        {bufferChannels.map((c) => {
+                                            const on = selectedChannels.has(c.id);
+                                            return (
+                                                <div key={c.id} className={`rounded-lg border transition-colors ${on ? 'bg-white/5 border-primary/40' : 'bg-white/5 border-white/5'}`}>
+                                                    <label className="flex items-center gap-3 p-3 cursor-pointer">
+                                                        <input type="checkbox" checked={on} onChange={() => toggleChannel(c.id)} className="w-4 h-4 rounded border-zinc-600 bg-black/50 text-primary focus:ring-primary" />
+                                                        <span className="flex items-center gap-2 text-sm text-white">{serviceIcon(c.service)} {c.name}</span>
+                                                        <span className="ml-auto text-[10px] uppercase tracking-wider text-zinc-500">{c.service}</span>
+                                                    </label>
+                                                    {on && (
+                                                        <textarea
+                                                            value={channelCaptions[c.id] || ''}
+                                                            onChange={(e) => setChannelCaptions(p => ({ ...p, [c.id]: e.target.value }))}
+                                                            rows={3}
+                                                            placeholder="Caption + hashtags…"
+                                                            className="w-full bg-black/30 border-t border-white/10 rounded-b-lg p-2.5 text-xs text-white focus:outline-none resize-none placeholder-zinc-600"
+                                                        />
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
                             </div>
 
                             {/* Scheduling */}
                             <div className="p-3 bg-white/5 rounded-lg border border-white/5">
                                 <div className="flex items-center justify-between mb-2">
                                     <div className="flex items-center gap-2 text-sm text-white font-medium">
-                                        <Calendar size={16} className="text-purple-400" /> Schedule Post
+                                        <Calendar size={16} className="text-purple-400" /> Schedule
                                     </div>
                                     <label className="relative inline-flex items-center cursor-pointer">
                                         <input type="checkbox" checked={isScheduling} onChange={(e) => setIsScheduling(e.target.checked)} className="sr-only peer" />
                                         <div className="w-9 h-5 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-purple-600"></div>
                                     </label>
                                 </div>
-
+                                <p className="text-[10px] text-zinc-500">{isScheduling ? 'Publish at a specific time.' : 'Off = next open slot in your Buffer queue.'}</p>
                                 {isScheduling && (
                                     <div className="mt-3 animate-[fadeIn_0.2s_ease-out]">
-                                        <label className="block text-xs text-zinc-400 mb-1">Select Date & Time</label>
                                         <div className="relative">
                                             <input
                                                 type="datetime-local"
@@ -610,26 +825,8 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                                     </div>
                                 )}
                             </div>
-
-                            {/* Platforms */}
-                            <div>
-                                <label className="block text-xs font-bold text-zinc-400 mb-2">Select Platforms</label>
-                                <div className="grid grid-cols-1 gap-2">
-                                    <label className="flex items-center gap-3 p-3 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10 transition-colors border border-white/5">
-                                        <input type="checkbox" checked={platforms.tiktok} onChange={e => setPlatforms({ ...platforms, tiktok: e.target.checked })} className="w-4 h-4 rounded border-zinc-600 bg-black/50 text-primary focus:ring-primary" />
-                                        <div className="flex items-center gap-2 text-sm text-white"><Video size={16} className="text-cyan-400" /> TikTok</div>
-                                    </label>
-                                    <label className="flex items-center gap-3 p-3 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10 transition-colors border border-white/5">
-                                        <input type="checkbox" checked={platforms.instagram} onChange={e => setPlatforms({ ...platforms, instagram: e.target.checked })} className="w-4 h-4 rounded border-zinc-600 bg-black/50 text-primary focus:ring-primary" />
-                                        <div className="flex items-center gap-2 text-sm text-white"><Instagram size={16} className="text-pink-400" /> Instagram</div>
-                                    </label>
-                                    <label className="flex items-center gap-3 p-3 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10 transition-colors border border-white/5">
-                                        <input type="checkbox" checked={platforms.youtube} onChange={e => setPlatforms({ ...platforms, youtube: e.target.checked })} className="w-4 h-4 rounded border-zinc-600 bg-black/50 text-primary focus:ring-primary" />
-                                        <div className="flex items-center gap-2 text-sm text-white"><Youtube size={16} className="text-red-400" /> YouTube Shorts</div>
-                                    </label>
-                                </div>
-                            </div>
                         </div>
+                        )}
 
                         {postResult && (
                             <div className={`mb-4 p-3 rounded-lg text-xs flex items-start gap-2 ${postResult.success ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
@@ -639,11 +836,11 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                         )}
 
                         <button
-                            onClick={handlePost}
-                            disabled={posting || !uploadPostKey}
+                            onClick={handleBufferPost}
+                            disabled={posting || !bufferKey}
                             className="w-full py-3 bg-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl text-white font-bold transition-all flex items-center justify-center gap-2"
                         >
-                            {posting ? <><Loader2 size={16} className="animate-spin" /> {isScheduling ? 'Scheduling...' : 'Publishing...'}</> : <><Share2 size={16} /> {isScheduling ? 'Schedule Post' : 'Publish Now'}</>}
+                            {posting ? <><Loader2 size={16} className="animate-spin" /> {isScheduling ? 'Scheduling…' : 'Adding to queue…'}</> : <><Share2 size={16} /> {isScheduling ? 'Schedule' : 'Add to Buffer Queue'}</>}
                         </button>
                     </div>
                 </div>
@@ -680,6 +877,28 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                 hasApiKey={!!elevenLabsKey}
             />
 
+            <CropModal
+                isOpen={showCropModal}
+                onClose={() => setShowCropModal(false)}
+                jobId={jobId}
+                clipIndex={index}
+                onApply={(newUrl) => {
+                    setCurrentVideoUrl(newUrl);
+                    if (videoRef.current) videoRef.current.load();
+                }}
+            />
+
+            <ScriptChatModal
+                isOpen={showScriptChat}
+                onClose={() => setShowScriptChat(false)}
+                jobId={jobId}
+                clipIndex={index}
+                geminiApiKey={geminiApiKey}
+                clipTitle={clip.video_title_for_youtube_short || clip.title || ''}
+            />
+
         </div>
     );
-}
+});
+
+export default ResultCard;
